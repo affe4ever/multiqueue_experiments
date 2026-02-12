@@ -1,1 +1,1 @@
-This repository contains experiments to compare the [multiqueue](https://github.com/marvinwilliams/multiqueue) to other state-of-the-art (relaxed) concurrent priority queues.
+This repository contains experiments to evaluate the effectiveness of relaxation for a master thesis at chalmers university. It is a modified fork where features deemed unnecesary are removed. For benchmarking properties exra metrics are added to the dijkstra experiments.
