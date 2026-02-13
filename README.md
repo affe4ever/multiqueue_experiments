@@ -1,1 +1,1 @@
-This repository contains experiments to evaluate the effectiveness of relaxation for a master thesis at chalmers university. It is a modified fork where features deemed unnecesary are removed. For benchmarking properties exra metrics are added to the dijkstra experiments.
+This repository contains experiments to evaluate the effectiveness of relaxation for a master's thesis at Chalmers University of Technology. It is a modified fork where features deemed unnecesary are removed. For benchmarking purposes exra metrics are added to the Dijsktra experiments.
