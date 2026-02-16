@@ -58,21 +58,55 @@ public:
         return data_[i];
     }
 
+    void sift_up(std::size_t i) {
+    while (i > 0) {
+        std::size_t parent = (i - 1) / 2;
+        if (!comp_(data_[parent], data_[i]))
+            break;
+        std::swap(data_[parent], data_[i]);
+        i = parent;
+    }
+}
+
+void sift_down(std::size_t i) {
+    std::size_t n = data_.size();
+        while (true) {
+            std::size_t left = 2 * i + 1;
+            std::size_t right = 2 * i + 2;
+            std::size_t largest = i;
+        
+            if (left < n && comp_(data_[largest], data_[left]))
+                largest = left;
+        
+            if (right < n && comp_(data_[largest], data_[right]))
+                largest = right;
+        
+            if (largest == i)
+                break;
+        
+            std::swap(data_[i], data_[largest]);
+            i = largest;
+        }
+    }
+
+
     T pop_at(std::size_t i) {
         T result = data_[i];
 
-        if (i == data_.size() - 1) {
-            data_.pop_back();
-            return result;
-        }
-
-        std::swap(data_[i], data_.back());
+    if (i == data_.size() - 1) {
         data_.pop_back();
-
-        // Restore heap property from position i
-        std::make_heap(data_.begin(), data_.end(), comp_);
         return result;
     }
+
+    std::swap(data_[i], data_.back());
+    data_.pop_back();
+
+    sift_down(i);
+    sift_up(i);
+
+    return result;
+}
+
 
 private:
     std::vector<T> data_;
@@ -80,11 +114,8 @@ private:
 };
 
 Node pop_normal(RelaxedPQ<Node, std::greater<Node>>& pq,
-                double mean,
-                double stddev) {
-
-    static thread_local std::mt19937 gen(std::random_device{}());
-    std::normal_distribution<double> dist(mean, stddev);
+                std::normal_distribution<double>& dist,
+                std::mt19937& gen) {
 
     int index = static_cast<int>(std::round(dist(gen)));
     index = std::clamp(index, 0, static_cast<int>(pq.size() - 1));
@@ -171,10 +202,13 @@ void dijkstra(std::filesystem::path const& graph_file,
     auto t_start = std::chrono::steady_clock::now();
     distances[0] = 0;
     pq.push({0, 0});
+    std::mt19937 gen(std::random_device{}());
+    std::normal_distribution<double> dist(normal_mean, normal_stddev);
+
     while (!pq.empty()) {
         sum_sizes += pq.size();
         max_size = std::max(max_size, pq.size());
-        auto node = pop_normal(pq, normal_mean, normal_stddev);
+        auto node = pop_normal(pq, dist, gen);
         // Ignore stale nodes
         if (node.distance > distances[node.id]) {
             ++ignored_nodes;
