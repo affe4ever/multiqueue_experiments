@@ -1,5 +1,6 @@
 #include "util/build_info.hpp"
 #include "util/graph.hpp"
+#include "../tools/replay_tree.hpp"
 
 #include <cxxopts.hpp>
 
@@ -19,109 +20,50 @@
 using clock_type = std::chrono::steady_clock;
 
 struct Node {
+    int id;
     long long distance;
-    std::size_t id;
 
-    friend bool operator>(Node const& lhs, Node const& rhs) noexcept {
-        return lhs.distance > rhs.distance;
+    bool operator<(const Node& other) const {
+        if (distance != other.distance)
+            return distance < other.distance;
+        return id < other.id;
+    }
+
+    bool operator==(const Node& other) const {
+        return id == other.id && distance == other.distance;
+    }
+
+    bool operator!=(const Node& other) const {
+        return !(*this == other);
     }
 };
 
-template<typename T, typename Compare = std::greater<T>>
-class RelaxedPQ {
-public:
-    RelaxedPQ() = default;
 
-    bool empty() const noexcept {
-        return data_.empty();
-    }
-
-    std::size_t size() const noexcept {
-        return data_.size();
-    }
-
-    void push(const T& value) {
-        data_.push_back(value);
-        std::push_heap(data_.begin(), data_.end(), comp_);
-    }
-
-    const T& top() const {
-        return data_.front();
-    }
-
-    void pop() {
-        std::pop_heap(data_.begin(), data_.end(), comp_);
-        data_.pop_back();
-    }
-
-    const T& at(std::size_t i) const {
-        return data_[i];
-    }
-
-    void sift_up(std::size_t i) {
-    while (i > 0) {
-        std::size_t parent = (i - 1) / 2;
-        if (!comp_(data_[parent], data_[i]))
-            break;
-        std::swap(data_[parent], data_[i]);
-        i = parent;
-    }
-}
-
-void sift_down(std::size_t i) {
-    std::size_t n = data_.size();
-        while (true) {
-            std::size_t left = 2 * i + 1;
-            std::size_t right = 2 * i + 2;
-            std::size_t largest = i;
-        
-            if (left < n && comp_(data_[largest], data_[left]))
-                largest = left;
-        
-            if (right < n && comp_(data_[largest], data_[right]))
-                largest = right;
-        
-            if (largest == i)
-                break;
-        
-            std::swap(data_[i], data_[largest]);
-            i = largest;
-        }
-    }
-
-
-    T pop_at(std::size_t i) {
-        T result = data_[i];
-
-    if (i == data_.size() - 1) {
-        data_.pop_back();
-        return result;
-    }
-
-    std::swap(data_[i], data_.back());
-    data_.pop_back();
-
-    sift_down(i);
-    sift_up(i);
-
-    return result;
-}
-
-
-private:
-    std::vector<T> data_;
-    Compare comp_;
+struct KeyOfNode {
+    static const Node& get(const Node& n) { return n; }
 };
 
-Node pop_normal(RelaxedPQ<Node, std::greater<Node>>& pq,
+using NodeTree = ReplayTree<Node, Node, KeyOfNode, std::less<Node>>;
+
+Node pop_normal(NodeTree& pq,
                 std::normal_distribution<double>& dist,
-                std::mt19937& gen) {
-
+                std::mt19937& gen)
+{
     int index = static_cast<int>(std::round(dist(gen)));
     index = std::clamp(index, 0, static_cast<int>(pq.size() - 1));
 
-    return pq.pop_at(index);
+    auto it = pq.begin();
+    std::advance(it, index);
+
+    Node node = *it;
+
+    auto [success, rank, delay] = pq.erase_val(node);
+    if (!success)
+        throw std::runtime_error("Failed to erase node from ReplayTree");
+
+    return node;
 }
+
 
 double inverse_normal_cdf(double p) {
     if (p <= 0.0 || p >= 1.0) {
@@ -195,13 +137,14 @@ void dijkstra(std::filesystem::path const& graph_file,
     long long ignored_nodes{0};
     std::size_t sum_sizes{0};
     std::size_t max_size{0};
-    std::vector<Node> container;
-    container.reserve(graph.num_nodes());
-    RelaxedPQ<Node, std::greater<Node>> pq;
-    std::clog << "Working...\n";
-    auto t_start = std::chrono::steady_clock::now();
+
+    NodeTree pq;
     distances[0] = 0;
-    pq.push({0, 0});
+    pq.insert({0, 0});
+
+    std::clog << "Working...\n";
+
+    auto t_start = std::chrono::steady_clock::now();
     std::mt19937 gen(std::random_device{}());
     std::normal_distribution<double> dist(normal_mean, normal_stddev);
 
@@ -218,7 +161,7 @@ void dijkstra(std::filesystem::path const& graph_file,
             auto d = node.distance + graph.edges[i].weight;
             if (d < distances[graph.edges[i].target]) {
                 distances[graph.edges[i].target] = d;
-                pq.push({d, graph.edges[i].target});
+                pq.insert({static_cast<int>(graph.edges[i].target), d});
             }
         }
         ++processed_nodes;
