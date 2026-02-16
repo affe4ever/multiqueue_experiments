@@ -74,7 +74,6 @@ public:
         return result;
     }
 
-
 private:
     std::vector<T> data_;
     Compare comp_;
@@ -93,6 +92,59 @@ Node pop_normal(RelaxedPQ<Node, std::greater<Node>>& pq,
     return pq.pop_at(index);
 }
 
+double inverse_normal_cdf(double p) {
+    if (p <= 0.0 || p >= 1.0) {
+        throw std::invalid_argument("Percentile must be in (0,1)");
+    }
+
+    // Coefficients for Acklam approximation
+    static const double a1 = -3.969683028665376e+01;
+    static const double a2 =  2.209460984245205e+02;
+    static const double a3 = -2.759285104469687e+02;
+    static const double a4 =  1.383577518672690e+02;
+    static const double a5 = -3.066479806614716e+01;
+    static const double a6 =  2.506628277459239e+00;
+
+    static const double b1 = -5.447609879822406e+01;
+    static const double b2 =  1.615858368580409e+02;
+    static const double b3 = -1.556989798598866e+02;
+    static const double b4 =  6.680131188771972e+01;
+    static const double b5 = -1.328068155288572e+01;
+
+    static const double c1 = -7.784894002430293e-03;
+    static const double c2 = -3.223964580411365e-01;
+    static const double c3 = -2.400758277161838e+00;
+    static const double c4 = -2.549732539343734e+00;
+    static const double c5 =  4.374664141464968e+00;
+    static const double c6 =  2.938163982698783e+00;
+
+    static const double d1 =  7.784695709041462e-03;
+    static const double d2 =  3.224671290700398e-01;
+    static const double d3 =  2.445134137142996e+00;
+    static const double d4 =  3.754408661907416e+00;
+
+    const double plow = 0.02425;
+    const double phigh = 1 - plow;
+
+    double q, r;
+
+    if (p < plow) {
+        q = std::sqrt(-2 * std::log(p));
+        return (((((c1*q + c2)*q + c3)*q + c4)*q + c5)*q + c6) /
+               ((((d1*q + d2)*q + d3)*q + d4)*q + 1);
+    }
+
+    if (phigh < p) {
+        q = std::sqrt(-2 * std::log(1 - p));
+        return -(((((c1*q + c2)*q + c3)*q + c4)*q + c5)*q + c6) /
+                ((((d1*q + d2)*q + d3)*q + d4)*q + 1);
+    }
+
+    q = p - 0.5;
+    r = q * q;
+    return (((((a1*r + a2)*r + a3)*r + a4)*r + a5)*r + a6) * q /
+           (((((b1*r + b2)*r + b3)*r + b4)*r + b5)*r + 1);
+}
 
 void dijkstra(std::filesystem::path const& graph_file,
             double normal_mean,
@@ -198,17 +250,20 @@ int main(int argc, char* argv[]) {
     std::filesystem::path graph_file;
     double normal_mean;
     double normal_stddev;
+    double percentile;
 
     cxxopts::Options cmd(argv[0], "Dijkstra with relaxed Gaussian extraction");
 
     cmd.add_options()
-        ("h,help", "Print help")
-        ("graph", "Input graph file",
-            cxxopts::value<std::filesystem::path>(graph_file))
-        ("mean", "Normal distribution mean (index space)",
-            cxxopts::value<double>(normal_mean)->default_value("0.0"))
-        ("stddev", "Normal distribution standard deviation (index space)",
-            cxxopts::value<double>(normal_stddev)->default_value("1.0"));
+    ("h,help", "Print help")
+    ("graph", "Input graph file",
+        cxxopts::value<std::filesystem::path>(graph_file))
+    ("mean", "Normal distribution mean (index space)",
+        cxxopts::value<double>(normal_mean))
+    ("stddev", "Normal distribution standard deviation (index space)",
+        cxxopts::value<double>(normal_stddev))
+    ("percentile", "Percentile for index 0 (value in (0,1))",
+        cxxopts::value<double>(percentile));
 
     cmd.parse_positional({"graph"});
 
@@ -228,9 +283,37 @@ int main(int argc, char* argv[]) {
         return EXIT_SUCCESS;
     }
 
-    if (normal_stddev < 0.0) {
-        std::cerr << "Error: stddev must be non-negative\n";
+    if (!args.count("mean")) {
+    std::cerr << "Error: --mean must be provided\n";
+    return EXIT_FAILURE;
+    }
+
+    bool stddev_given = args.count("stddev");
+    bool percentile_given = args.count("percentile");
+
+    if (!stddev_given && !percentile_given) {
+        std::cerr << "Error: either --stddev or --percentile must be provided\n";
         return EXIT_FAILURE;
+    }
+
+    if (stddev_given && percentile_given) {
+        std::cerr << "Error: provide either --stddev or --percentile, not both\n";
+        return EXIT_FAILURE;
+    }
+
+    if (percentile_given) {
+        double z = inverse_normal_cdf(percentile);
+
+        if (z == 0.0) {
+            std::cerr << "Error: percentile cannot be 0.5\n";
+            return EXIT_FAILURE;
+        }
+
+        normal_stddev = (0.0 - normal_mean) / z;
+
+        if (normal_stddev < 0.0) {
+            normal_stddev = -normal_stddev;
+        }
     }
 
     std::clog << "= Settings =\n";

@@ -62,3 +62,6 @@ endif()
 
 add_executable(dijkstra_seq dijkstra_seq.cpp)
 target_link_libraries(dijkstra_seq PRIVATE benchmark_base)
+
+add_executable(dijkstra_seq_error dijkstra_seq_error.cpp)
+target_link_libraries(dijkstra_seq_error PRIVATE benchmark_base)
