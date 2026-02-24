@@ -45,6 +45,12 @@ struct KeyOfNode {
 
 using NodeTree = ReplayTree<Node, Node, KeyOfNode, std::less<Node>>;
 
+static long long g_total_rank = 0;
+static long long g_total_delay = 0;
+static long long g_total_removals = 0;
+static long long g_highest_rank = 0;
+static long long g_highest_delay = 0;
+
 Node pop_normal(NodeTree& pq,
                 std::normal_distribution<double>& dist,
                 std::mt19937& gen)
@@ -62,6 +68,15 @@ Node pop_normal(NodeTree& pq,
         throw std::runtime_error("Erased wrong index from ReplayTree");
     if (!success)
         throw std::runtime_error("Failed to erase node from ReplayTree");
+
+    g_total_rank += rank;
+    g_total_delay += delay;
+    ++g_total_removals;
+
+    if (g_highest_rank < rank)
+        g_highest_rank = rank;
+    if (g_highest_delay < delay)
+        g_highest_delay = delay;
 
     return node;
 }
@@ -333,6 +348,7 @@ int main(int argc, char* argv[]) {
         effective_percentile = 0.5 * (1.0 + std::erf(z / std::sqrt(2.0)));
     }
 
+
     std::clog << "= Settings =\n";
     std::clog << "Graph: " << graph_file << '\n';
     std::clog << "Mean: " << normal_mean << '\n';
@@ -341,6 +357,22 @@ int main(int argc, char* argv[]) {
 
     std::clog << "= Running benchmark =\n";
     dijkstra(graph_file, normal_mean, normal_stddev);
+
+    double avg_rank = 0.0;
+    double avg_delay = 0.0;
+
+    if (g_total_removals > 0) {
+        avg_rank = static_cast<double>(g_total_rank) /
+                   static_cast<double>(g_total_removals);
+        avg_delay = static_cast<double>(g_total_delay) /
+                    static_cast<double>(g_total_removals);
+    }
+
+    std::clog << "Average rank: " << avg_rank << '\n';
+    std::clog << "Average delay: " << avg_delay << '\n';
+
+    std::clog << "Highest rank error: " << g_highest_rank << '\n';
+    std::clog << "Highest delay: " << g_highest_rank << '\n';
 
     return EXIT_SUCCESS;
 }
