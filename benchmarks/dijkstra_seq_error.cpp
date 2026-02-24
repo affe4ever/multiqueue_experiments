@@ -58,6 +58,8 @@ Node pop_normal(NodeTree& pq,
     Node node = *it;
 
     auto [success, rank, delay] = pq.erase_val(node);
+    if (rank != index)
+        throw std::runtime_error("Erased wrong index from ReplayTree");
     if (!success)
         throw std::runtime_error("Failed to erase node from ReplayTree");
 
@@ -239,7 +241,7 @@ int main(int argc, char* argv[]) {
         cxxopts::value<double>(normal_mean))
     ("stddev", "Normal distribution standard deviation (index space)",
         cxxopts::value<double>(normal_stddev))
-    ("percentile", "Percentile for index 0 (value in (0,1))",
+    ("percentile", "Percentile for index 0 (value in (0, 0.5))",
         cxxopts::value<double>(percentile));
 
     cmd.parse_positional({"graph"});
@@ -260,25 +262,57 @@ int main(int argc, char* argv[]) {
         return EXIT_SUCCESS;
     }
 
-    if (!args.count("mean")) {
-    std::cerr << "Error: --mean must be provided\n";
-    return EXIT_FAILURE;
-    }
-
+    bool mean_given = args.count("mean");
     bool stddev_given = args.count("stddev");
     bool percentile_given = args.count("percentile");
 
-    if (!stddev_given && !percentile_given) {
-        std::cerr << "Error: either --stddev or --percentile must be provided\n";
+    if ((!mean_given && !stddev_given && !percentile_given) ||
+        (mean_given && stddev_given && percentile_given)) {
+        std::cerr << "Error: exactly two of the arguments --mean, --stddev or percentile must be provided\n";
+        return EXIT_FAILURE;
+    }
+
+    if (mean_given && !stddev_given && !percentile_given) {
+        std::cerr << "Error: if mean is given, either --stddev or --percentile must be provided\n";
+        return EXIT_FAILURE;
+    }
+
+    if (!mean_given && stddev_given && !percentile_given) {
+        std::cerr << "Error: if stddev given, either --mean or --percentile must be provided\n";
+        return EXIT_FAILURE;
+    }
+
+    if (!mean_given && !stddev_given && percentile_given) {
+        std::cerr << "Error: if percentile given, either --mean or --stddev must be provided\n";
         return EXIT_FAILURE;
     }
 
     if (stddev_given && percentile_given) {
-        std::cerr << "Error: provide either --stddev or --percentile, not both\n";
-        return EXIT_FAILURE;
+        if (percentile <= 0.0 || percentile >= 0.5) {
+            std::cerr << "Error: percentile must be in (0, 0.5)\n";
+            return EXIT_FAILURE;
+        }
+
+        if (normal_stddev <= 0.0) {
+            std::cerr << "Error: stddev must be positive\n";
+            return EXIT_FAILURE;
+        }
+
+        double z = inverse_normal_cdf(percentile);
+
+        if (z == 0.0) {
+            std::cerr << "Error: percentile cannot be 0.5\n";
+            return EXIT_FAILURE;
+        }
+
+        normal_mean = -z * normal_stddev;
+
+        if (normal_mean < 0.0) {
+            normal_mean = -normal_mean;
+        }
     }
 
-    if (percentile_given) {
+    if (percentile_given && mean_given) {
         double z = inverse_normal_cdf(percentile);
 
         if (z == 0.0) {
@@ -293,10 +327,17 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    double effective_percentile;
+    {
+        double z = (0.0 - normal_mean) / normal_stddev;
+        effective_percentile = 0.5 * (1.0 + std::erf(z / std::sqrt(2.0)));
+    }
+
     std::clog << "= Settings =\n";
     std::clog << "Graph: " << graph_file << '\n';
     std::clog << "Mean: " << normal_mean << '\n';
-    std::clog << "Stddev: " << normal_stddev << "\n\n";
+    std::clog << "Stddev: " << normal_stddev << "\n";
+    std::clog << "Percentile (index 0): " << effective_percentile << "\n\n";
 
     std::clog << "= Running benchmark =\n";
     dijkstra(graph_file, normal_mean, normal_stddev);
