@@ -199,7 +199,7 @@ void write_log(std::vector<ThreadData> const& thread_data, std::ostream& out) {
         if (elem_it != element_to_seq.end()) {
             auto it = sequence_to_index.find(elem_it->second);
             if (it != sequence_to_index.end()) {
-                out << 'd' << it->second << '\n';
+                out << '-' << it->second << '\n';
             }
         }
     }
