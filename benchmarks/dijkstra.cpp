@@ -6,6 +6,7 @@
 #ifdef LOG_OPERATIONS
 #include <fstream>
 #include <unordered_map>
+#include <unordered_set>
 #endif
 
 #include <cxxopts.hpp>
@@ -97,13 +98,12 @@ struct Counter {
 #ifdef LOG_OPERATIONS
 struct ThreadData {
     struct PushLog {
-        std::chrono::high_resolution_clock::time_point tick;
         std::pair<unsigned long, unsigned long> element;  // {distance, node_id}
         std::size_t sequence_id;
     };
     struct PopLog {
-        std::chrono::high_resolution_clock::time_point tick;
         std::pair<unsigned long, unsigned long> element;  // {distance, node_id}
+        std::size_t sequence_id;
     };
     std::vector<PushLog> pushes;
     std::vector<PopLog> pops;
@@ -128,16 +128,11 @@ struct SharedData {
 #ifdef LOG_OPERATIONS
 void push_with_logging(handle_type& handle, unsigned long distance, unsigned long node_id, 
                        Counter& counter, SharedData& data, ThreadData& thread_data) {
-    // Get unique sequence ID
+    // Get unique sequence ID and push to queue
     auto seq_id = data.push_counter.fetch_add(1, std::memory_order_relaxed);
-    
-    // Actually push to queue
     if (handle.push({distance, node_id})) {
         ++counter.pushed_nodes;
-        
-        // Record the push with timestamp
-        auto tick = std::chrono::high_resolution_clock::now();
-        thread_data.pushes.push_back({tick, {distance, node_id}, seq_id});
+        thread_data.pushes.push_back({{distance, node_id}, seq_id});
     }
 }
 #endif
@@ -182,45 +177,46 @@ void write_log(std::vector<ThreadData> const& thread_data, std::ostream& out) {
         pops.insert(pops.end(), td.pops.begin(), td.pops.end());
     }
     
-    // Sort by timestamp
+    // Sort by sequence number (preserves causality)
     std::sort(pushes.begin(), pushes.end(), 
-              [](auto const& lhs, auto const& rhs) { return lhs.tick < rhs.tick; });
+              [](auto const& lhs, auto const& rhs) { return lhs.sequence_id < rhs.sequence_id; });
     std::sort(pops.begin(), pops.end(), 
-              [](auto const& lhs, auto const& rhs) { return lhs.tick < rhs.tick; });
+              [](auto const& lhs, auto const& rhs) { return lhs.sequence_id < rhs.sequence_id; });
     
-    // Map sequence_id to push index for output
-    std::unordered_map<std::size_t, std::size_t> sequence_to_index;
+    // Build element-to-push-indices map for FIFO matching
+    std::map<std::pair<unsigned long, unsigned long>, std::vector<std::size_t>> element_to_push_indices;
     for (std::size_t i = 0; i < pushes.size(); ++i) {
-        sequence_to_index[pushes[i].sequence_id] = i;
-    }
-    
-    // Build element-to-sequence_id map (using last push for each element)
-    std::map<std::pair<unsigned long, unsigned long>, std::size_t> element_to_seq;
-    for (auto const& push : pushes) {
-        element_to_seq[push.element] = push.sequence_id;
+        element_to_push_indices[pushes[i].element].push_back(i);
     }
     
     // Write in analyze_quality format
     out << pushes.size() << ' ' << pops.size() << '\n';
-    std::size_t i = 0;
-    for (auto const& pop : pops) {
-        // Write pushes that happened before this pop
-        while (i < pushes.size() && pushes[i].tick < pop.tick) {
-            out << '+' << pushes[i].element.first << '\n';
-            ++i;
+    std::size_t push_idx = 0;
+    std::size_t pop_idx = 0;
+    std::size_t num_pushes_written = 0;
+    
+    // Merge pushes and pops in sequence number order
+    while (push_idx < pushes.size() || pop_idx < pops.size()) {
+        // Write pushes that come before the next pop
+        while (push_idx < pushes.size() && 
+               (pop_idx >= pops.size() || pushes[push_idx].sequence_id < pops[pop_idx].sequence_id)) {
+            out << '+' << pushes[push_idx].element.first << '\n';
+            ++push_idx;
+            ++num_pushes_written;
         }
-        // Find which push this pop corresponds to by matching element
-        auto elem_it = element_to_seq.find(pop.element);
-        if (elem_it != element_to_seq.end()) {
-            auto it = sequence_to_index.find(elem_it->second);
-            if (it != sequence_to_index.end()) {
-                out << 'd' << it->second << '\n';
+        
+        // Write pops
+        while (pop_idx < pops.size() && 
+               (push_idx >= pushes.size() || pops[pop_idx].sequence_id < pushes[push_idx].sequence_id)) {
+            auto const& pop = pops[pop_idx];
+            // Find the first unconsumed push of this element
+            auto& indices = element_to_push_indices[pop.element];
+            if (!indices.empty()) {
+                out << '-' << indices.front() << '\n';
+                indices.erase(indices.begin());
             }
+            ++pop_idx;
         }
-    }
-    // Write remaining pushes
-    for (; i < pushes.size(); ++i) {
-        out << '+' << pushes[i].element.first << '\n';
     }
 }
 #endif
@@ -253,7 +249,8 @@ void write_log(std::vector<ThreadData> const& thread_data, std::ostream& out) {
             node = handle.try_pop();
 #ifdef LOG_OPERATIONS
             if (node.has_value()) {
-                thread_data.pops.push_back({tick, {node->first, node->second}});
+                auto seq_id = data.push_counter.fetch_add(1, std::memory_order_relaxed);
+                thread_data.pops.push_back({{node->first, node->second}, seq_id});
             }
 #endif
             return node.has_value();
