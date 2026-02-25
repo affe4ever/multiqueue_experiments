@@ -117,11 +117,11 @@ void push_with_logging(handle_type& handle, unsigned long distance, unsigned lon
     auto seq_id = data.push_counter.fetch_add(1, std::memory_order_relaxed);
     
     // Actually push to queue
+    auto tick = std::chrono::high_resolution_clock::now();
     if (handle.push({distance, node_id})) {
         ++counter.pushed_nodes;
         
         // Record the push with timestamp
-        auto tick = std::chrono::high_resolution_clock::now();
         thread_data.pushes.push_back({tick, {distance, node_id}, seq_id});
     }
 }
@@ -234,10 +234,10 @@ void write_log(std::vector<ThreadData> const& thread_data, std::ostream& out) {
     while (true) {
         std::optional<node_type> node;
         while (data.termination_detection.repeat([&]() {
-            auto tick = std::chrono::high_resolution_clock::now();
             node = handle.try_pop();
 #ifdef LOG_OPERATIONS
             if (node.has_value()) {
+                auto tick = std::chrono::high_resolution_clock::now();
                 thread_data.pops.push_back({tick, {node->first, node->second}});
             }
 #endif
