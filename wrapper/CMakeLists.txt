@@ -189,6 +189,10 @@ add_library(mq_pq INTERFACE)
 target_link_libraries(mq_pq INTERFACE multiqueue::multiqueue)
 target_compile_definitions(mq_pq INTERFACE PQ_MQ_PQ)
 
+add_library(nd_mq INTERFACE)
+target_link_libraries(nd_mq INTERFACE multiqueue::multiqueue)
+target_compile_definitions(nd_mq INTERFACE PQ_ND_MQ)
+
 set(COMPETITORS
     ${MQ_VARIANTS}
     klsm4
@@ -202,6 +206,7 @@ set(COMPETITORS
     tbb_pq
     locked_pq
     mq_pq
+    nd_mq
     PARENT_SCOPE)
 
 set(GENERIC_COMPETITORS

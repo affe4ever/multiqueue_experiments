@@ -32,6 +32,12 @@ struct Settings {
     std::filesystem::path graph_file;
     unsigned int seed = 1;
     pq_type::settings_type pq_settings{};
+    
+    #ifdef PQ_ND_MQ
+    std::optional<double> nd_mq_mean{};
+    std::optional<double> nd_mq_stddev{};
+    std::optional<double> nd_mq_percentile{};
+    #endif
 };
 
 Settings settings{};
@@ -43,6 +49,15 @@ void register_cmd_options(cxxopts::Options& cmd) {
         ("graph", "The input graph", cxxopts::value<std::filesystem::path>(settings.graph_file), "PATH");
     // clang-format on
     settings.pq_settings.register_cmd_options(cmd);
+
+    
+    #ifdef PQ_ND_MQ
+    cmd.add_options()
+        ("mean", "ND_MQ mean value", cxxopts::value<double>())
+        ("stddev", "ND_MQ standard deviation", cxxopts::value<double>())
+        ("percentile", "ND_MQ percentile (0 < p < 1)", cxxopts::value<double>());
+    #endif
+    
     cmd.parse_positional({"graph"});
 }
 
@@ -149,7 +164,11 @@ void run_benchmark() {
     shared_data.distances = std::vector<AtomicDistance>(shared_data.graph.num_nodes());
 
     std::vector<Counter> thread_counter(static_cast<std::size_t>(settings.num_threads));
-    auto pq = pq_type(settings.num_threads, shared_data.graph.num_nodes(), settings.pq_settings);
+    auto pq = pq_type(settings.num_threads, shared_data.graph.num_nodes(), settings.pq_settings
+    #ifdef PQ_ND_MQ
+        , settings.nd_mq_mean, settings.nd_mq_stddev, settings.nd_mq_percentile
+    #endif
+    );
     std::clog << "Working...\n";
     auto start_time = std::chrono::steady_clock::now();
     thread_coordination::Dispatcher dispatcher{settings.num_threads, [&](auto ctx) {
@@ -238,6 +257,19 @@ int main(int argc, char* argv[]) {
             std::cerr << cmd.help() << '\n';
             return EXIT_SUCCESS;
         }
+
+        #ifdef PQ_ND_MQ
+        if (args.count("mean") > 0) {
+            settings.nd_mq_mean = args["mean"].as<double>();
+        }
+        if (args.count("stddev") > 0) {
+            settings.nd_mq_stddev = args["stddev"].as<double>();
+        }
+        if (args.count("percentile") > 0) {
+            settings.nd_mq_percentile = args["percentile"].as<double>();
+        }
+        #endif
+
     } catch (cxxopts::OptionParseException const& e) {
         std::cerr << "Error parsing command line: " << e.what() << '\n';
         std::cerr << "Use --help for usage information" << '\n';
