@@ -1,13 +1,24 @@
 #include "replay_tree.hpp"
-
 #include <cstddef>
 #include <iostream>
 #include <vector>
+#include <cmath>
 
 struct Metrics {
     std::size_t rank_error;
     std::size_t delay;
 };
+
+struct Temp {
+    std::vector<Metrics> metrics;
+    std::double_t avg_rank_error;
+    std::double_t avg_delay;
+    std::size_t largest_rank;
+    std::size_t smallest_rank;
+    std::size_t largest_delay;
+    std::size_t smallest_delay;
+};
+
 
 void write_metrics(std::ostream& out, std::vector<Metrics> const& metrics) {
     out << "rank_error,delay\n";
@@ -55,7 +66,8 @@ Log read_log(std::istream& in) {
     return log;
 }
 
-std::vector<Metrics> replay(Log const& log) {
+//std::vector<Metrics> replay(Log const& log) {
+Temp replay(Log const& log){
     struct HeapElement {
         Log::key_type key;
         std::size_t index;
@@ -75,21 +87,51 @@ std::vector<Metrics> replay(Log const& log) {
 
     ReplayTree<Log::key_type, HeapElement, ExtractKey> replay_tree{};
     std::vector<Metrics> metrics;
-    metrics.reserve(log.pops.size());
+    
+    // init vars
+    Temp temp;
+    std::size_t total_rank = 0;
+    std::size_t total_delay = 0;
+    std::size_t largest_rank = 0;
+    std::size_t smallest_rank = 99999999999;
+    std::size_t largest_delay = 0;
+    std::size_t smallest_delay = 99999999999;
+    
+    std::size_t pop_size = log.pops.size();
+    metrics.reserve(pop_size);
     std::size_t push_index = 0;
     for (auto const& pop : log.pops) {
         for (; push_index < pop.push_index; ++push_index) {
             replay_tree.insert({log.keys[push_index], push_index});
         }
         auto [success, rank, delay] = replay_tree.erase_val({log.keys[pop.ref_index], pop.ref_index});
+    
         if (!success) {
             std::cerr << "Failed to delete element " << pop.ref_index << " with key " << log.keys[pop.ref_index]
-                      << '\n';
+            << '\n';
             std::abort();
-        }
+        }        
+        // add up the rank and delay
+        total_rank += rank;
+        total_delay += delay;
+
+        if (rank > largest_rank){largest_rank = rank;}
+        if (rank < smallest_rank){smallest_rank = rank;}
+        if (delay > largest_delay){largest_delay = delay;}
+        if (delay < smallest_delay){smallest_delay = delay;}
+
         metrics.push_back({rank, delay});
     }
-    return metrics;
+
+    temp.metrics = metrics;
+    temp.avg_rank_error = static_cast<double_t>(total_rank) / static_cast<double_t>(pop_size);
+    temp.avg_delay = static_cast<double_t>(total_delay) / static_cast<double_t>(pop_size);
+    temp.largest_rank = largest_rank;
+    temp.smallest_rank = smallest_rank;
+    temp.largest_delay = largest_delay;
+    temp.smallest_delay = smallest_delay;
+
+    return temp;
 }
 
 int main() {
@@ -99,7 +141,14 @@ int main() {
     std::clog << "Reading log...\n";
     auto log = read_log(std::cin);
     std::clog << "Analyzing log...\n";
-    auto metrics = replay(log);
+    Temp temp = replay(log);
+    auto metrics = temp.metrics;
+    std::clog << "Average rank error: " << temp.avg_rank_error << "\n";
+    std::clog << "Largest rank error: " << temp.largest_delay << "\n";
+    std::clog << "Smallest rank errror: " << temp.smallest_rank << "\n";
+    std::clog << "Average delay: " << temp.avg_delay << "\n";
+    std::clog << "Largest delay: " << temp.largest_delay << "\n";
+    std::clog << "Smallest delay: " << temp.smallest_delay << "\n";
     std::clog << "Writing metrics...\n";
     write_metrics(std::cout, metrics);
 }
