@@ -6,7 +6,7 @@
 #ifdef LOG_OPERATIONS
 #include <fstream>
 #include <unordered_map>
-#include <unordered_set>
+//#include <unordered_set>
 #endif
 
 #include <cxxopts.hpp>
@@ -16,9 +16,11 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <x86intrin.h>
+#include <algorithm>
 #include <atomic>
 #include <cassert>
 #include <chrono>
+#include <deque>
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
@@ -36,16 +38,15 @@ struct Settings {
     int num_threads = 4;
     std::filesystem::path graph_file;
     unsigned int seed = 1;
+    pq_type::settings_type pq_settings{};
 #ifdef LOG_OPERATIONS
     std::filesystem::path log_file = "dijkstra_log.txt";
 #endif
-    pq_type::settings_type pq_settings{};
-    
-    #ifdef PQ_ND_MQ
+#ifdef PQ_ND_MQ
     std::optional<double> nd_mq_mean{};
     std::optional<double> nd_mq_stddev{};
     std::optional<double> nd_mq_percentile{};
-    #endif
+#endif
 };
 
 Settings settings{};
@@ -63,12 +64,12 @@ void register_cmd_options(cxxopts::Options& cmd) {
     settings.pq_settings.register_cmd_options(cmd);
 
     
-    #ifdef PQ_ND_MQ
+#ifdef PQ_ND_MQ
     cmd.add_options()
         ("mean", "ND_MQ mean value", cxxopts::value<double>())
         ("stddev", "ND_MQ standard deviation", cxxopts::value<double>())
         ("percentile", "ND_MQ percentile (0 < p < 1)", cxxopts::value<double>());
-    #endif
+#endif
     
     cmd.parse_positional({"graph"});
 }
@@ -99,11 +100,11 @@ struct Counter {
 struct ThreadData {
     struct PushLog {
         std::pair<unsigned long, unsigned long> element;  // {distance, node_id}
-        std::size_t sequence_id;
+        std::chrono::steady_clock::time_point timestamp;
     };
     struct PopLog {
         std::pair<unsigned long, unsigned long> element;  // {distance, node_id}
-        std::size_t sequence_id;
+        std::chrono::steady_clock::time_point timestamp;
     };
     std::vector<PushLog> pushes;
     std::vector<PopLog> pops;
@@ -120,19 +121,17 @@ struct SharedData {
     termination_detection::TerminationDetection termination_detection;
     std::atomic_llong missing_nodes{0};
 #ifdef LOG_OPERATIONS
-    std::atomic<std::size_t> push_counter{0};
     std::vector<ThreadData> thread_data;
 #endif
 };
 
 #ifdef LOG_OPERATIONS
 void push_with_logging(handle_type& handle, unsigned long distance, unsigned long node_id, 
-                       Counter& counter, SharedData& data, ThreadData& thread_data) {
-    // Get unique sequence ID and push to queue
-    auto seq_id = data.push_counter.fetch_add(1, std::memory_order_relaxed);
+                       Counter& counter, ThreadData& thread_data) {
+    auto timestamp = std::chrono::steady_clock::now();
     if (handle.push({distance, node_id})) {
         ++counter.pushed_nodes;
-        thread_data.pushes.push_back({{distance, node_id}, seq_id});
+        thread_data.pushes.push_back({{distance, node_id}, timestamp});
     }
 }
 #endif
@@ -154,7 +153,7 @@ void process_node(node_type const& node, handle_type& handle, Counter& counter, 
         while (d < old_d) {
             if (data.distances[target].value.compare_exchange_weak(old_d, d, std::memory_order_relaxed)) {
 #ifdef LOG_OPERATIONS
-                push_with_logging(handle, static_cast<unsigned long>(d), target, counter, data, thread_data);
+                push_with_logging(handle, static_cast<unsigned long>(d), target, counter, thread_data);
 #else
                 if (handle.push({d, target})) {
                     ++counter.pushed_nodes;
@@ -169,53 +168,62 @@ void process_node(node_type const& node, handle_type& handle, Counter& counter, 
 
 #ifdef LOG_OPERATIONS
 void write_log(std::vector<ThreadData> const& thread_data, std::ostream& out) {
-    // Merge all pushes and pops from all threads
-    std::vector<ThreadData::PushLog> pushes;
-    std::vector<ThreadData::PopLog> pops;
+    struct Operation {
+        std::chrono::steady_clock::time_point timestamp;
+        std::pair<unsigned long, unsigned long> element;  // {distance, node_id}
+        bool is_push;
+    };
+    
+    std::vector<Operation> all_ops;
+    
+    // Collect all operations from all threads
     for (auto const& td : thread_data) {
-        pushes.insert(pushes.end(), td.pushes.begin(), td.pushes.end());
-        pops.insert(pops.end(), td.pops.begin(), td.pops.end());
-    }
-    
-    // Sort by sequence number (preserves causality)
-    std::sort(pushes.begin(), pushes.end(), 
-              [](auto const& lhs, auto const& rhs) { return lhs.sequence_id < rhs.sequence_id; });
-    std::sort(pops.begin(), pops.end(), 
-              [](auto const& lhs, auto const& rhs) { return lhs.sequence_id < rhs.sequence_id; });
-    
-    // Build element-to-push-indices map for FIFO matching
-    std::map<std::pair<unsigned long, unsigned long>, std::vector<std::size_t>> element_to_push_indices;
-    for (std::size_t i = 0; i < pushes.size(); ++i) {
-        element_to_push_indices[pushes[i].element].push_back(i);
-    }
-    
-    // Write in analyze_quality format
-    out << pushes.size() << ' ' << pops.size() << '\n';
-    std::size_t push_idx = 0;
-    std::size_t pop_idx = 0;
-    std::size_t num_pushes_written = 0;
-    
-    // Merge pushes and pops in sequence number order
-    while (push_idx < pushes.size() || pop_idx < pops.size()) {
-        // Write pushes that come before the next pop
-        while (push_idx < pushes.size() && 
-               (pop_idx >= pops.size() || pushes[push_idx].sequence_id < pops[pop_idx].sequence_id)) {
-            out << '+' << pushes[push_idx].element.first << '\n';
-            ++push_idx;
-            ++num_pushes_written;
+        for (auto const& push : td.pushes) {
+            all_ops.push_back({push.timestamp, push.element, true});
         }
-        
-        // Write pops
-        while (pop_idx < pops.size() && 
-               (push_idx >= pushes.size() || pops[pop_idx].sequence_id < pushes[push_idx].sequence_id)) {
-            auto const& pop = pops[pop_idx];
-            // Find the first unconsumed push of this element
-            auto& indices = element_to_push_indices[pop.element];
-            if (!indices.empty()) {
-                out << '-' << indices.front() << '\n';
-                indices.erase(indices.begin());
+        for (auto const& pop : td.pops) {
+            all_ops.push_back({pop.timestamp, pop.element, false});
+        }
+    }
+    
+    // Sort by timestamp
+    std::sort(all_ops.begin(), all_ops.end(),
+              [](auto const& a, auto const& b) { return a.timestamp < b.timestamp; });
+    
+    // Count operations
+    std::size_t num_pushes = 0;
+    std::size_t num_pops = 0;
+    for (auto const& op : all_ops) {
+        if (op.is_push) ++num_pushes;
+        else ++num_pops;
+    }
+    
+    out << num_pushes << ' ' << num_pops << '\n';
+    
+    // Hash function for element pairs
+    struct PairHash {
+        std::size_t operator()(std::pair<unsigned long, unsigned long> const& p) const noexcept {
+            return std::hash<unsigned long>{}(p.first) ^ (std::hash<unsigned long>{}(p.second) << 1);
+        }
+    };
+    
+    // Map elements to their push indices (FIFO queue per element)
+    std::unordered_map<std::pair<unsigned long, unsigned long>, std::deque<std::size_t>, PairHash> element_to_indices;
+    
+    std::size_t push_index = 0;
+    
+    for (auto const& op : all_ops) {
+        if (op.is_push) {
+            out << '+' << op.element.first << '\n';  // Output distance as key
+            element_to_indices[op.element].push_back(push_index);
+            ++push_index;
+        } else {
+            // Find the corresponding push index
+            auto it = element_to_indices.find(op.element);
+            if (it != element_to_indices.end() && !it->second.empty()) {
+                out << '-' << it->second.front() << '\n';
+                it->second.pop_front();
             }
-            ++pop_idx;
         }
     }
 }
@@ -235,7 +243,7 @@ void write_log(std::vector<ThreadData> const& thread_data, std::ostream& out) {
     if (thread_context.id() == 0) {
         data.distances[0].value = 0;
 #ifdef LOG_OPERATIONS
-        push_with_logging(handle, 0, 0, counter, data, thread_data);
+        push_with_logging(handle, 0, 0, counter, thread_data);
 #else
         handle.push({0, 0});
         ++counter.pushed_nodes;
@@ -245,12 +253,12 @@ void write_log(std::vector<ThreadData> const& thread_data, std::ostream& out) {
     while (true) {
         std::optional<node_type> node;
         while (data.termination_detection.repeat([&]() {
-            auto tick = std::chrono::high_resolution_clock::now();
+            //auto tick = std::chrono::high_resolution_clock::now();
             node = handle.try_pop();
 #ifdef LOG_OPERATIONS
             if (node.has_value()) {
-                auto seq_id = data.push_counter.fetch_add(1, std::memory_order_relaxed);
-                thread_data.pops.push_back({{node->first, node->second}, seq_id});
+                auto timestamp = std::chrono::steady_clock::now();
+                thread_data.pops.push_back({{node->first, node->second}, timestamp});
             }
 #endif
             return node.has_value();
