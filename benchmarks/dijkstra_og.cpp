@@ -3,10 +3,6 @@
 #include "util/selector.hpp"
 #include "util/termination_detection.hpp"
 #include "util/thread_coordination.hpp"
-#ifdef LOG_OPERATIONS
-#include <fstream>
-#include <unordered_map>
-#endif
 
 #include <cxxopts.hpp>
 
@@ -15,11 +11,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <x86intrin.h>
-#include <algorithm>
 #include <atomic>
 #include <cassert>
 #include <chrono>
-#include <deque>
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
@@ -38,14 +32,6 @@ struct Settings {
     std::filesystem::path graph_file;
     unsigned int seed = 1;
     pq_type::settings_type pq_settings{};
-#ifdef LOG_OPERATIONS
-    std::filesystem::path log_file = "dijkstra_log.txt";
-#endif
-#ifdef PQ_ND_MQ
-    std::optional<double> nd_mq_mean{};
-    std::optional<double> nd_mq_stddev{};
-    std::optional<double> nd_mq_percentile{};
-#endif
 };
 
 Settings settings{};
@@ -54,20 +40,9 @@ void register_cmd_options(cxxopts::Options& cmd) {
     // clang-format off
     cmd.add_options()
         ("j,threads", "The number of threads", cxxopts::value<int>(settings.num_threads), "NUMBER")
-        ("graph", "The input graph", cxxopts::value<std::filesystem::path>(settings.graph_file), "PATH")
-#ifdef LOG_OPERATIONS
-        ("l,log-file", "File to write the operation log to", cxxopts::value<std::filesystem::path>(settings.log_file), "PATH")
-#endif
-        ;
+        ("graph", "The input graph", cxxopts::value<std::filesystem::path>(settings.graph_file), "PATH");
     // clang-format on
     settings.pq_settings.register_cmd_options(cmd);
-
-#ifdef PQ_ND_MQ
-    cmd.add_options()("mean", "ND_MQ mean value", cxxopts::value<double>())(
-        "stddev", "ND_MQ standard deviation", cxxopts::value<double>())("percentile", "ND_MQ percentile (0 < p < 1)",
-                                                                        cxxopts::value<double>());
-#endif
-
     cmd.parse_positional({"graph"});
 }
 
@@ -93,21 +68,6 @@ struct Counter {
     long long processed_nodes{0};
 };
 
-#ifdef LOG_OPERATIONS
-struct ThreadData {
-    struct PushLog {
-        std::pair<unsigned long, unsigned long> element;  // {distance, node_id}
-        std::chrono::steady_clock::time_point timestamp;
-    };
-    struct PopLog {
-        std::pair<unsigned long, unsigned long> element;  // {distance, node_id}
-        std::chrono::steady_clock::time_point timestamp;
-    };
-    std::vector<PushLog> pushes;
-    std::vector<PopLog> pops;
-};
-#endif
-
 struct alignas(L1_CACHE_LINE_SIZE) AtomicDistance {
     std::atomic<long long> value{std::numeric_limits<long long>::max()};
 };
@@ -117,28 +77,9 @@ struct SharedData {
     std::vector<AtomicDistance> distances;
     termination_detection::TerminationDetection termination_detection;
     std::atomic_llong missing_nodes{0};
-#ifdef LOG_OPERATIONS
-    std::vector<ThreadData> thread_data;
-#endif
 };
 
-#ifdef LOG_OPERATIONS
-void push_with_logging(handle_type& handle, unsigned long distance, unsigned long node_id, Counter& counter,
-                       ThreadData& thread_data) {
-    auto timestamp = std::chrono::steady_clock::now();
-    if (handle.push({distance, node_id})) {
-        ++counter.pushed_nodes;
-        thread_data.pushes.push_back({{distance, node_id}, timestamp});
-    }
-}
-#endif
-
-void process_node(node_type const& node, handle_type& handle, Counter& counter, SharedData& data
-#ifdef LOG_OPERATIONS
-                  ,
-                  ThreadData& thread_data
-#endif
-) {
+void process_node(node_type const& node, handle_type& handle, Counter& counter, SharedData& data) {
     auto current_distance = data.distances[node.second].value.load(std::memory_order_relaxed);
     if (static_cast<long long>(node.first) > current_distance) {
         ++counter.ignored_nodes;
@@ -150,13 +91,9 @@ void process_node(node_type const& node, handle_type& handle, Counter& counter, 
         auto old_d = data.distances[target].value.load(std::memory_order_relaxed);
         while (d < old_d) {
             if (data.distances[target].value.compare_exchange_weak(old_d, d, std::memory_order_relaxed)) {
-#ifdef LOG_OPERATIONS
-                push_with_logging(handle, static_cast<unsigned long>(d), target, counter, thread_data);
-#else
                 if (handle.push({d, target})) {
                     ++counter.pushed_nodes;
                 }
-#endif
                 break;
             }
         }
@@ -164,108 +101,23 @@ void process_node(node_type const& node, handle_type& handle, Counter& counter, 
     ++counter.processed_nodes;
 }
 
-#ifdef LOG_OPERATIONS
-void write_log(std::vector<ThreadData> const& thread_data, std::ostream& out) {
-    struct Operation {
-        std::chrono::steady_clock::time_point timestamp;
-        std::pair<unsigned long, unsigned long> element;  // {distance, node_id}
-        bool is_push;
-    };
-
-    std::vector<Operation> all_ops;
-
-    // Collect all operations from all threads
-    for (auto const& td : thread_data) {
-        for (auto const& push : td.pushes) {
-            all_ops.push_back({push.timestamp, push.element, true});
-        }
-        for (auto const& pop : td.pops) {
-            all_ops.push_back({pop.timestamp, pop.element, false});
-        }
-    }
-
-    // Sort by timestamp
-    std::sort(all_ops.begin(), all_ops.end(), [](auto const& a, auto const& b) { return a.timestamp < b.timestamp; });
-
-    // Count operations
-    std::size_t num_pushes = 0;
-    std::size_t num_pops = 0;
-    for (auto const& op : all_ops) {
-        if (op.is_push)
-            ++num_pushes;
-        else
-            ++num_pops;
-    }
-
-    out << num_pushes << ' ' << num_pops << '\n';
-
-    // Hash function for element pairs
-    struct PairHash {
-        std::size_t operator()(std::pair<unsigned long, unsigned long> const& p) const noexcept {
-            return std::hash<unsigned long>{}(p.first) ^ (std::hash<unsigned long>{}(p.second) << 1);
-        }
-    };
-
-    // Map elements to their push indices (FIFO queue per element)
-    std::unordered_map<std::pair<unsigned long, unsigned long>, std::deque<std::size_t>, PairHash> element_to_indices;
-
-    std::size_t push_index = 0;
-
-    for (auto const& op : all_ops) {
-        if (op.is_push) {
-            out << '+' << op.element.first << '\n';  // Output distance as key
-            element_to_indices[op.element].push_back(push_index);
-            ++push_index;
-        } else {
-            // Find the corresponding push index
-            auto it = element_to_indices.find(op.element);
-            if (it != element_to_indices.end() && !it->second.empty()) {
-                out << '-' << it->second.front() << '\n';
-                it->second.pop_front();
-            }
-        }
-    }
-}
-#endif
-
 [[gnu::noinline]] Counter benchmark_thread(thread_coordination::Context& thread_context, pq_type& pq,
                                            SharedData& data) {
     Counter counter;
     auto handle = pq.get_handle();
-#ifdef LOG_OPERATIONS
-    ThreadData thread_data;
-    // Reserve space for logs
-    thread_data.pushes.reserve(data.graph.num_edges());
-    thread_data.pops.reserve(data.graph.num_nodes());
-#endif
-
     if (thread_context.id() == 0) {
         data.distances[0].value = 0;
-#ifdef LOG_OPERATIONS
-        push_with_logging(handle, 0, 0, counter, thread_data);
-#else
         handle.push({0, 0});
         ++counter.pushed_nodes;
-#endif
     }
     thread_context.synchronize();
     while (true) {
         std::optional<node_type> node;
         while (data.termination_detection.repeat([&]() {
             node = handle.try_pop();
-#ifdef LOG_OPERATIONS
-            if (node.has_value()) {
-                auto timestamp = std::chrono::steady_clock::now();
-                thread_data.pops.push_back({{node->first, node->second}, timestamp});
-            }
-#endif
             return node.has_value();
         })) {
-#ifdef LOG_OPERATIONS
-            process_node(*node, handle, counter, data, thread_data);
-#else
             process_node(*node, handle, counter, data);
-#endif
         }
         data.missing_nodes.fetch_add(counter.pushed_nodes - counter.processed_nodes - counter.ignored_nodes,
                                      std::memory_order_relaxed);
@@ -280,9 +132,6 @@ void write_log(std::vector<ThreadData> const& thread_data, std::ostream& out) {
         }
         thread_context.synchronize();
     }
-#ifdef LOG_OPERATIONS
-    data.thread_data[static_cast<std::size_t>(thread_context.id())] = std::move(thread_data);
-#endif
     return counter;
 }
 
@@ -298,17 +147,9 @@ void run_benchmark() {
     std::clog << "Graph has " << shared_data.graph.num_nodes() << " nodes and " << shared_data.graph.num_edges()
               << " edges\n";
     shared_data.distances = std::vector<AtomicDistance>(shared_data.graph.num_nodes());
-#ifdef LOG_OPERATIONS
-    shared_data.thread_data.resize(static_cast<std::size_t>(settings.num_threads));
-#endif
 
     std::vector<Counter> thread_counter(static_cast<std::size_t>(settings.num_threads));
-    auto pq = pq_type(settings.num_threads, shared_data.graph.num_nodes(), settings.pq_settings
-#ifdef PQ_ND_MQ
-                      ,
-                      settings.nd_mq_mean, settings.nd_mq_stddev, settings.nd_mq_percentile
-#endif
-    );
+    auto pq = pq_type(settings.num_threads, shared_data.graph.num_nodes(), settings.pq_settings);
     std::clog << "Working...\n";
     auto start_time = std::chrono::steady_clock::now();
     thread_coordination::Dispatcher dispatcher{settings.num_threads, [&](auto ctx) {
@@ -319,17 +160,6 @@ void run_benchmark() {
     auto end_time = std::chrono::steady_clock::now();
 
     std::clog << "Done\n";
-#ifdef LOG_OPERATIONS
-    std::clog << "Writing logs...\n";
-    std::ofstream log_out(settings.log_file);
-    if (log_out) {
-        write_log(shared_data.thread_data, log_out);
-        log_out.close();
-        std::clog << "Log written to " << settings.log_file << "\n";
-    } else {
-        std::cerr << "Warning: Could not write log file " << settings.log_file << "\n";
-    }
-#endif
     auto total_counts =
         std::accumulate(thread_counter.begin(), thread_counter.end(), Counter{}, [](auto sum, auto const& counter) {
             sum.pushed_nodes += counter.pushed_nodes;
@@ -408,19 +238,6 @@ int main(int argc, char* argv[]) {
             std::cerr << cmd.help() << '\n';
             return EXIT_SUCCESS;
         }
-
-#ifdef PQ_ND_MQ
-        if (args.count("mean") > 0) {
-            settings.nd_mq_mean = args["mean"].as<double>();
-        }
-        if (args.count("stddev") > 0) {
-            settings.nd_mq_stddev = args["stddev"].as<double>();
-        }
-        if (args.count("percentile") > 0) {
-            settings.nd_mq_percentile = args["percentile"].as<double>();
-        }
-#endif
-
     } catch (cxxopts::OptionParseException const& e) {
         std::cerr << "Error parsing command line: " << e.what() << '\n';
         std::cerr << "Use --help for usage information" << '\n';

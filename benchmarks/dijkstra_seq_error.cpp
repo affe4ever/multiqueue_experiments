@@ -1,6 +1,6 @@
+#include "../tools/replay_tree.hpp"
 #include "util/build_info.hpp"
 #include "util/graph.hpp"
-#include "../tools/replay_tree.hpp"
 
 #include <cxxopts.hpp>
 
@@ -11,11 +11,11 @@
 #include <iostream>
 #include <limits>
 #include <queue>
+#include <random>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
-#include <random>
 
 using clock_type = std::chrono::steady_clock;
 
@@ -38,9 +38,10 @@ struct Node {
     }
 };
 
-
 struct KeyOfNode {
-    static const Node& get(const Node& n) { return n; }
+    static const Node& get(const Node& n) {
+        return n;
+    }
 };
 
 using NodeTree = ReplayTree<Node, Node, KeyOfNode, std::less<Node>>;
@@ -52,10 +53,7 @@ static long long g_highest_rank = 0;
 static long long g_highest_delay = 0;
 static long long edge_relaxations = 0;
 
-Node pop_normal(NodeTree& pq,
-                std::normal_distribution<double>& dist,
-                std::mt19937& gen)
-{
+Node pop_normal(NodeTree& pq, std::normal_distribution<double>& dist, std::mt19937& gen) {
     int index = static_cast<int>(std::round(dist(gen)));
     index = std::clamp(index, 0, static_cast<int>(pq.size() - 1));
 
@@ -82,7 +80,6 @@ Node pop_normal(NodeTree& pq,
     return node;
 }
 
-
 double inverse_normal_cdf(double p) {
     if (p <= 0.0 || p >= 1.0) {
         throw std::invalid_argument("Percentile must be in (0,1)");
@@ -90,29 +87,29 @@ double inverse_normal_cdf(double p) {
 
     // Coefficients for Acklam approximation
     static const double a1 = -3.969683028665376e+01;
-    static const double a2 =  2.209460984245205e+02;
+    static const double a2 = 2.209460984245205e+02;
     static const double a3 = -2.759285104469687e+02;
-    static const double a4 =  1.383577518672690e+02;
+    static const double a4 = 1.383577518672690e+02;
     static const double a5 = -3.066479806614716e+01;
-    static const double a6 =  2.506628277459239e+00;
+    static const double a6 = 2.506628277459239e+00;
 
     static const double b1 = -5.447609879822406e+01;
-    static const double b2 =  1.615858368580409e+02;
+    static const double b2 = 1.615858368580409e+02;
     static const double b3 = -1.556989798598866e+02;
-    static const double b4 =  6.680131188771972e+01;
+    static const double b4 = 6.680131188771972e+01;
     static const double b5 = -1.328068155288572e+01;
 
     static const double c1 = -7.784894002430293e-03;
     static const double c2 = -3.223964580411365e-01;
     static const double c3 = -2.400758277161838e+00;
     static const double c4 = -2.549732539343734e+00;
-    static const double c5 =  4.374664141464968e+00;
-    static const double c6 =  2.938163982698783e+00;
+    static const double c5 = 4.374664141464968e+00;
+    static const double c6 = 2.938163982698783e+00;
 
-    static const double d1 =  7.784695709041462e-03;
-    static const double d2 =  3.224671290700398e-01;
-    static const double d3 =  2.445134137142996e+00;
-    static const double d4 =  3.754408661907416e+00;
+    static const double d1 = 7.784695709041462e-03;
+    static const double d2 = 3.224671290700398e-01;
+    static const double d3 = 2.445134137142996e+00;
+    static const double d4 = 3.754408661907416e+00;
 
     const double plow = 0.02425;
     const double phigh = 1 - plow;
@@ -121,26 +118,23 @@ double inverse_normal_cdf(double p) {
 
     if (p < plow) {
         q = std::sqrt(-2 * std::log(p));
-        return (((((c1*q + c2)*q + c3)*q + c4)*q + c5)*q + c6) /
-               ((((d1*q + d2)*q + d3)*q + d4)*q + 1);
+        return (((((c1 * q + c2) * q + c3) * q + c4) * q + c5) * q + c6) /
+            ((((d1 * q + d2) * q + d3) * q + d4) * q + 1);
     }
 
     if (phigh < p) {
         q = std::sqrt(-2 * std::log(1 - p));
-        return -(((((c1*q + c2)*q + c3)*q + c4)*q + c5)*q + c6) /
-                ((((d1*q + d2)*q + d3)*q + d4)*q + 1);
+        return -(((((c1 * q + c2) * q + c3) * q + c4) * q + c5) * q + c6) /
+            ((((d1 * q + d2) * q + d3) * q + d4) * q + 1);
     }
 
     q = p - 0.5;
     r = q * q;
-    return (((((a1*r + a2)*r + a3)*r + a4)*r + a5)*r + a6) * q /
-           (((((b1*r + b2)*r + b3)*r + b4)*r + b5)*r + 1);
+    return (((((a1 * r + a2) * r + a3) * r + a4) * r + a5) * r + a6) * q /
+        (((((b1 * r + b2) * r + b3) * r + b4) * r + b5) * r + 1);
 }
 
-void dijkstra(std::filesystem::path const& graph_file,
-            double normal_mean,
-            double normal_stddev) noexcept
- {
+void dijkstra(std::filesystem::path const& graph_file, double normal_mean, double normal_stddev) noexcept {
     std::clog << "Reading graph...\n";
     Graph graph;
     try {
@@ -252,16 +246,11 @@ int main(int argc, char* argv[]) {
 
     cxxopts::Options cmd(argv[0], "Dijkstra with relaxed Gaussian extraction");
 
-    cmd.add_options()
-    ("h,help", "Print help")
-    ("graph", "Input graph file",
-        cxxopts::value<std::filesystem::path>(graph_file))
-    ("mean", "Normal distribution mean (index space)",
-        cxxopts::value<double>(normal_mean))
-    ("stddev", "Normal distribution standard deviation (index space)",
-        cxxopts::value<double>(normal_stddev))
-    ("percentile", "Percentile for index 0 (value in (0, 0.5))",
-        cxxopts::value<double>(percentile));
+    cmd.add_options()("h,help", "Print help")("graph", "Input graph file",
+                                              cxxopts::value<std::filesystem::path>(graph_file))(
+        "mean", "Normal distribution mean (index space)", cxxopts::value<double>(normal_mean))(
+        "stddev", "Normal distribution standard deviation (index space)", cxxopts::value<double>(normal_stddev))(
+        "percentile", "Percentile for index 0 (value in (0, 0.5))", cxxopts::value<double>(percentile));
 
     cmd.parse_positional({"graph"});
 
@@ -270,8 +259,7 @@ int main(int argc, char* argv[]) {
     try {
         args = cmd.parse(argc, argv);
     } catch (const cxxopts::OptionParseException& e) {
-        std::cerr << "Error parsing command line: "
-                  << e.what() << '\n';
+        std::cerr << "Error parsing command line: " << e.what() << '\n';
         std::cerr << "Use --help for usage information\n";
         return EXIT_FAILURE;
     }
@@ -285,8 +273,7 @@ int main(int argc, char* argv[]) {
     bool stddev_given = args.count("stddev");
     bool percentile_given = args.count("percentile");
 
-    if ((!mean_given && !stddev_given && !percentile_given) ||
-        (mean_given && stddev_given && percentile_given)) {
+    if ((!mean_given && !stddev_given && !percentile_given) || (mean_given && stddev_given && percentile_given)) {
         std::cerr << "Error: exactly two of the arguments --mean, --stddev or percentile must be provided\n";
         return EXIT_FAILURE;
     }
@@ -352,7 +339,6 @@ int main(int argc, char* argv[]) {
         effective_percentile = 0.5 * (1.0 + std::erf(z / std::sqrt(2.0)));
     }
 
-
     std::clog << "= Settings =\n";
     std::clog << "Graph: " << graph_file << '\n';
     std::clog << "Mean: " << normal_mean << '\n';
@@ -366,10 +352,8 @@ int main(int argc, char* argv[]) {
     double avg_delay = 0.0;
 
     if (g_total_removals > 0) {
-        avg_rank = static_cast<double>(g_total_rank) /
-                   static_cast<double>(g_total_removals);
-        avg_delay = static_cast<double>(g_total_delay) /
-                    static_cast<double>(g_total_removals);
+        avg_rank = static_cast<double>(g_total_rank) / static_cast<double>(g_total_removals);
+        avg_delay = static_cast<double>(g_total_delay) / static_cast<double>(g_total_removals);
     }
 
     std::clog << "Average rank: " << avg_rank << '\n';

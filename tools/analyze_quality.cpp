@@ -1,8 +1,8 @@
-#include "replay_tree.hpp"
+#include <cmath>
 #include <cstddef>
 #include <iostream>
 #include <vector>
-#include <cmath>
+#include "replay_tree.hpp"
 
 struct Metrics {
     std::size_t rank_error;
@@ -18,7 +18,6 @@ struct Temp {
     std::size_t largest_delay;
     std::size_t smallest_delay;
 };
-
 
 void write_metrics(std::ostream& out, std::vector<Metrics> const& metrics) {
     out << "rank_error,delay\n";
@@ -66,8 +65,8 @@ Log read_log(std::istream& in) {
     return log;
 }
 
-//std::vector<Metrics> replay(Log const& log) {
-Temp replay(Log const& log){
+// std::vector<Metrics> replay(Log const& log) {
+Temp replay(Log const& log) {
     struct HeapElement {
         Log::key_type key;
         std::size_t index;
@@ -87,7 +86,7 @@ Temp replay(Log const& log){
 
     ReplayTree<Log::key_type, HeapElement, ExtractKey> replay_tree{};
     std::vector<Metrics> metrics;
-    
+
     // init vars
     Temp temp;
     std::size_t total_rank = 0;
@@ -96,7 +95,7 @@ Temp replay(Log const& log){
     std::size_t smallest_rank = 99999999999;
     std::size_t largest_delay = 0;
     std::size_t smallest_delay = 99999999999;
-    
+
     std::size_t pop_size = log.pops.size();
     metrics.reserve(pop_size);
     std::size_t push_index = 0;
@@ -105,20 +104,28 @@ Temp replay(Log const& log){
             replay_tree.insert({log.keys[push_index], push_index});
         }
         auto [success, rank, delay] = replay_tree.erase_val({log.keys[pop.ref_index], pop.ref_index});
-    
+
         if (!success) {
             std::cerr << "Failed to delete element " << pop.ref_index << " with key " << log.keys[pop.ref_index]
-            << '\n';
+                      << '\n';
             std::abort();
-        }        
+        }
         // add up the rank and delay
         total_rank += rank;
         total_delay += delay;
 
-        if (rank > largest_rank){largest_rank = rank;}
-        if (rank < smallest_rank){smallest_rank = rank;}
-        if (delay > largest_delay){largest_delay = delay;}
-        if (delay < smallest_delay){smallest_delay = delay;}
+        if (rank > largest_rank) {
+            largest_rank = rank;
+        }
+        if (rank < smallest_rank) {
+            smallest_rank = rank;
+        }
+        if (delay > largest_delay) {
+            largest_delay = delay;
+        }
+        if (delay < smallest_delay) {
+            smallest_delay = delay;
+        }
 
         metrics.push_back({rank, delay});
     }
