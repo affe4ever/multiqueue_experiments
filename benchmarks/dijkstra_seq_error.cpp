@@ -50,6 +50,7 @@ static long long g_total_delay = 0;
 static long long g_total_removals = 0;
 static long long g_highest_rank = 0;
 static long long g_highest_delay = 0;
+static long long edge_relaxations = 0;
 
 Node pop_normal(NodeTree& pq,
                 std::normal_distribution<double>& dist,
@@ -180,6 +181,7 @@ void dijkstra(std::filesystem::path const& graph_file,
                 distances[graph.edges[i].target] = d;
                 pq.insert({static_cast<int>(graph.edges[i].target), d});
             }
+            edge_relaxations++;
         }
         ++processed_nodes;
     }
@@ -201,6 +203,7 @@ void dijkstra(std::filesystem::path const& graph_file,
     std::clog << "Longest distance: " << *furthest_node << '\n';
     std::clog << "Processed nodes: " << processed_nodes << '\n';
     std::clog << "Ignored nodes: " << ignored_nodes << '\n';
+    std::clog << "Edge relaxations: " << edge_relaxations << '\n';
     std::clog << "Average PQ size: " << static_cast<double>(sum_sizes) / static_cast<double>(processed_nodes + ignored_nodes) << '\n';
     std::clog << "Max PQ size: " << max_size << '\n';
 
@@ -221,6 +224,7 @@ void dijkstra(std::filesystem::path const& graph_file,
     std::cout << std::quoted("longest_distance") << ':' << *furthest_node << ',';
     std::cout << std::quoted("processed_nodes") << ':' << processed_nodes << ',';
     std::cout << std::quoted("ignored_nodes") << ':' << ignored_nodes << ',';
+    std::cout << std::quoted("edge_relaxations") << ':' << edge_relaxations << ',';
     std::cout << std::quoted("average_pq_size") << ':'
               << static_cast<double>(sum_sizes) / static_cast<double>(processed_nodes + ignored_nodes) << ',';
     std::cout << std::quoted("max_pq_size") << ':' << max_size;
