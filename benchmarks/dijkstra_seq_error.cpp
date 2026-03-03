@@ -178,8 +178,8 @@ void dijkstra(std::filesystem::path const& graph_file,
             auto d = node.distance + graph.edges[i].weight;
             if (d < distances[graph.edges[i].target]) {
                 distances[graph.edges[i].target] = d;
-                pq.insert({static_cast<int>(graph.edges[i].target), d});
             }
+            pq.insert({static_cast<int>(graph.edges[i].target), d});
         }
         ++processed_nodes;
     }
