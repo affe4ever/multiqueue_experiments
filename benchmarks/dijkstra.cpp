@@ -91,6 +91,8 @@ struct Counter {
     long long pushed_nodes{0};
     long long ignored_nodes{0};
     long long processed_nodes{0};
+    long long edge_relaxations{0};
+    long long discarded_edges{0};
 };
 
 #ifdef LOG_OPERATIONS
@@ -160,6 +162,10 @@ void process_node(node_type const& node, handle_type& handle, Counter& counter, 
                 break;
             }
         }
+        if (d >= old_d) {
+            ++counter.discarded_edges;
+        }
+        ++counter.edge_relaxations;
     }
     ++counter.processed_nodes;
 }
@@ -335,6 +341,8 @@ void run_benchmark() {
             sum.pushed_nodes += counter.pushed_nodes;
             sum.processed_nodes += counter.processed_nodes;
             sum.ignored_nodes += counter.ignored_nodes;
+            sum.edge_relaxations += counter.edge_relaxations;
+            sum.discarded_edges += counter.discarded_edges;
             return sum;
         });
     std::clog << '\n';
@@ -357,6 +365,8 @@ void run_benchmark() {
     std::clog << "Longest distance: " << furthest_node->value.load(std::memory_order_relaxed) << '\n';
     std::clog << "Processed nodes: " << total_counts.processed_nodes << '\n';
     std::clog << "Ignored nodes: " << total_counts.ignored_nodes << '\n';
+    std::clog << "Edge relaxations: " << total_counts.edge_relaxations << '\n';
+    std::clog << "Discarded edges: " << total_counts.discarded_edges << '\n';
     if (total_counts.processed_nodes + total_counts.ignored_nodes != total_counts.pushed_nodes) {
         std::cerr << "Warning: Not all nodes were popped\n";
         std::cerr << "Probably the priority queue discards duplicate keys\n";
@@ -377,6 +387,8 @@ void run_benchmark() {
     std::cout << std::quoted("longest_distance") << ':' << furthest_node->value.load(std::memory_order_relaxed) << ',';
     std::cout << std::quoted("processed_nodes") << ':' << total_counts.processed_nodes << ',';
     std::cout << std::quoted("ignored_nodes") << ':' << total_counts.ignored_nodes;
+    std::cout << std::quoted("edge_relaxations") << ':' << total_counts.edge_relaxations << ',';
+    std::cout << std::quoted("discarded_edges") << ':' << total_counts.discarded_edges << ',';
     std::cout << '}';
     std::cout << '}' << '\n';
 }
