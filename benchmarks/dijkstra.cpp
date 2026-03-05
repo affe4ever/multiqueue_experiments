@@ -151,6 +151,8 @@ void process_node(node_type const& node, handle_type& handle, Counter& counter, 
         auto d = static_cast<long long>(node.first) + data.graph.edges[i].weight;
         auto old_d = data.distances[target].value.load(std::memory_order_relaxed);
         while (d < old_d) {
+            // Atomic CAS operation
+            // keep trying untill successfull
             if (data.distances[target].value.compare_exchange_weak(old_d, d, std::memory_order_relaxed)) {
 #ifdef LOG_OPERATIONS
                 push_with_logging(handle, static_cast<unsigned long>(d), target, counter, thread_data);
