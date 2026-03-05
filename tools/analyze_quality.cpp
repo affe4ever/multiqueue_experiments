@@ -17,6 +17,8 @@ struct Temp {
     std::size_t smallest_rank;
     std::size_t largest_delay;
     std::size_t smallest_delay;
+    std::double_t avg_pq_size;
+    std::size_t max_pq_size;
 };
 
 void write_metrics(std::ostream& out, std::vector<Metrics> const& metrics) {
@@ -92,9 +94,12 @@ Temp replay(Log const& log) {
     std::size_t total_rank = 0;
     std::size_t total_delay = 0;
     std::size_t largest_rank = 0;
-    std::size_t smallest_rank = 99999999999;
+    std::size_t smallest_rank = INFINITY;
     std::size_t largest_delay = 0;
-    std::size_t smallest_delay = 99999999999;
+    std::size_t smallest_delay = INFINITY;
+    std::size_t sum_pq_sizes = 0;
+    std::size_t max_pq_size = 0;
+    std::size_t current_pq_size = 0;
 
     std::size_t pop_size = log.pops.size();
     metrics.reserve(pop_size);
@@ -102,7 +107,13 @@ Temp replay(Log const& log) {
     for (auto const& pop : log.pops) {
         for (; push_index < pop.push_index; ++push_index) {
             replay_tree.insert({log.keys[push_index], push_index});
+            ++current_pq_size;
         }
+        
+        // Track PQ size before popping
+        sum_pq_sizes += current_pq_size;
+        max_pq_size = std::max(max_pq_size, current_pq_size);
+        
         auto [success, rank, delay] = replay_tree.erase_val({log.keys[pop.ref_index], pop.ref_index});
 
         if (!success) {
@@ -110,7 +121,9 @@ Temp replay(Log const& log) {
                       << '\n';
             std::abort();
         }
-        // add up the rank and delay
+        --current_pq_size;
+        
+        // Add up the rank and delay
         total_rank += rank;
         total_delay += delay;
 
@@ -137,6 +150,8 @@ Temp replay(Log const& log) {
     temp.smallest_rank = smallest_rank;
     temp.largest_delay = largest_delay;
     temp.smallest_delay = smallest_delay;
+    temp.avg_pq_size = static_cast<double_t>(sum_pq_sizes) / static_cast<double_t>(pop_size);
+    temp.max_pq_size = max_pq_size;
 
     return temp;
 }
@@ -156,6 +171,8 @@ int main() {
     std::clog << "Average delay: " << temp.avg_delay << "\n";
     std::clog << "Largest delay: " << temp.largest_delay << "\n";
     std::clog << "Smallest delay: " << temp.smallest_delay << "\n";
+    std::clog << "Average PQ size: " << temp.avg_pq_size << "\n";
+    std::clog << "Max PQ size: " << temp.max_pq_size << "\n";
     std::clog << "Writing metrics...\n";
     write_metrics(std::cout, metrics);
 }
