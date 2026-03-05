@@ -1,7 +1,7 @@
 #pragma once
 
 #include "util.hpp"
-#include "../tools/replay_tree.hpp"
+#include "../tools/ranked_btree.hpp"
 
 #include <mutex>
 #include <random>
@@ -10,31 +10,39 @@
 #include <algorithm>
 #include <iostream>
 
-namespace wrapper::mq_pq {
+namespace wrapper::dr_pq {
 
 template <bool Min, typename Key = unsigned long, typename T = Key>
-class ND_MQ {
+class DR_PQ {
     public:
         using key_type    = Key;
         using mapped_type = T;
         using value_type  = std::pair<key_type, mapped_type>;
 
     private:
-        struct KeyOfValue {
-            static const value_type& get(const value_type& v) { return v; }
-        };
-
         using comparator = std::conditional_t<Min,
                                               std::less<value_type>,
                                               std::greater<value_type>>;
 
-        using pq_type = ReplayTree<value_type,
-                                   value_type,
-                                   KeyOfValue,
-                                   comparator>;
+        using pq_type = ranked_btree::tree<value_type, comparator>;
 
-        std::mutex lock_{};
-        pq_type pq_{};
+        struct NoLock {
+            void lock()   {}
+            void unlock() {}
+        };
+
+        const bool threaded_;
+        std::mutex real_lock_{};
+        NoLock     no_lock_{};
+
+        struct Guard {
+            std::mutex* m_;
+            explicit Guard(std::mutex* m) : m_(m) { if (m_) m_->lock(); }
+            ~Guard()                               { if (m_) m_->unlock(); }
+        };
+        Guard make_guard() { return Guard(threaded_ ? &real_lock_ : nullptr); }
+
+        pq_type pq_;
 
         double mean_{0.0};
         double stddev_{1.0};
@@ -44,7 +52,7 @@ class ND_MQ {
         std::normal_distribution<double> dist_{0.0, 1.0};
 
     public:
-        using handle_type   = util::SelfHandle<ND_MQ>;
+        using handle_type   = util::SelfHandle<DR_PQ>;
         using settings_type = util::EmptySettings;
 
         static double inverse_normal_cdf(double p) {
@@ -99,12 +107,13 @@ class ND_MQ {
                    (((((b1*r + b2)*r + b3)*r + b4)*r + b5)*r + 1);
         }
 
-        ND_MQ(int /*unused*/,
-              std::size_t /*initial_capacity*/,
+        DR_PQ(int num_threads,
+              std::size_t,
               settings_type const& /*unused*/,
               std::optional<double> mean = std::nullopt,
               std::optional<double> stddev = std::nullopt,
               std::optional<double> percentile = std::nullopt)
+            : threaded_(num_threads != 0)
         {
             bool m = mean.has_value();
             bool s = stddev.has_value();
@@ -144,19 +153,19 @@ class ND_MQ {
 
             dist_ = std::normal_distribution<double>(mean_, stddev_);
 
-            std::clog << "ND_MQ settings\n";
+            std::clog << "DR_PQ settings\n";
             std::clog << "Mean: " << mean_ << '\n';
             std::clog << "Stddev: " << stddev_ << '\n';
             std::clog << "Percentile (index 0): " << percentile_ << "\n\n";
         }
 
         void push(value_type const& value) {
-            std::scoped_lock guard(lock_);
+            auto guard = make_guard();
             pq_.insert(value);
         }
 
         std::optional<value_type> try_pop() {
-            std::scoped_lock guard(lock_);
+            auto guard = make_guard();
 
             if (pq_.empty())
                 return std::nullopt;
@@ -166,31 +175,23 @@ class ND_MQ {
                                0,
                                static_cast<int>(pq_.size() - 1));
 
-            auto it = pq_.begin();
-            std::advance(it, index);
-
-            value_type value = *it;
-
-            auto [success, rank, delay] = pq_.erase_val(value);
-
-            if (!success)
-                throw std::runtime_error("ND_MQ: erase_val failed");
-
+            value_type value = *pq_.select_by_rank(static_cast<std::size_t>(index));
+            pq_.erase_by_rank(static_cast<std::size_t>(index));
             return value;
         }
 
         bool empty() const {
-            std::scoped_lock guard(lock_);
+            auto guard = const_cast<DR_PQ*>(this)->make_guard();
             return pq_.empty();
         }
 
         std::size_t size() const {
-            std::scoped_lock guard(lock_);
+            auto guard = const_cast<DR_PQ*>(this)->make_guard();
             return pq_.size();
         }
 
         static void write_human_readable(std::ostream& out) {
-            out << "ND_MQ (ReplayTree-based Gaussian MQ)\n";
+            out << "DR_PQ (ranked_btree-based Gaussian MQ)\n";
         }
 
         handle_type get_handle() {
@@ -198,4 +199,4 @@ class ND_MQ {
         }
     };
 
-} // namespace wrapper::nd_mq
+} // namespace wrapper::dr_pq

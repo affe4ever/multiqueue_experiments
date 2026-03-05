@@ -39,9 +39,9 @@
 #elif defined PQ_MQ_PQ
 #include "wrapper/mq_pq.hpp"
 #define PQ wrapper::mq_pq::MultiQueuePQ
-#elif defined PQ_ND_MQ
-#include "wrapper/nd_mq.hpp"
-#define PQ wrapper::mq_pq::ND_MQ
+#elif defined DR_PQ_PQ
+#include "wrapper/dr_pq.hpp"
+#define PQ wrapper::dr_pq::DR_PQ
 #else
 #error No valid PQ specified
 #endif

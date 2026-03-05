@@ -1,4 +1,3 @@
-#include "../tools/replay_tree.hpp"
 #include "util/build_info.hpp"
 #include "util/graph.hpp"
 
@@ -44,7 +43,8 @@ struct KeyOfNode {
     }
 };
 
-using NodeTree = ReplayTree<Node, Node, KeyOfNode, std::less<Node>>;
+#include "../tools/ranked_btree.hpp"
+using NodeTree = ranked_btree::tree<Node>;
 
 static long long g_total_rank = 0;
 static long long g_total_delay = 0;
@@ -58,25 +58,12 @@ Node pop_normal(NodeTree& pq, std::normal_distribution<double>& dist, std::mt199
     int index = static_cast<int>(std::round(dist(gen)));
     index = std::clamp(index, 0, static_cast<int>(pq.size() - 1));
 
-    auto it = pq.begin();
-    std::advance(it, index);
+    auto it = pq.select_by_rank(index);
 
     Node node = *it;
+    pq.erase(it);
 
-    auto [success, rank, delay] = pq.erase_val(node);
-    if (rank != index)
-        throw std::runtime_error("Erased wrong index from ReplayTree");
-    if (!success)
-        throw std::runtime_error("Failed to erase node from ReplayTree");
-
-    g_total_rank += rank;
-    g_total_delay += delay;
     ++g_total_removals;
-
-    if (g_highest_rank < rank)
-        g_highest_rank = rank;
-    if (g_highest_delay < delay)
-        g_highest_delay = delay;
 
     return node;
 }
