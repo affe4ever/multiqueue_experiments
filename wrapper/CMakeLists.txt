@@ -190,8 +190,10 @@ target_link_libraries(mq_pq INTERFACE multiqueue::multiqueue)
 target_compile_definitions(mq_pq INTERFACE PQ_MQ_PQ)
 
 add_library(dr_pq INTERFACE)
-target_link_libraries(dr_pq INTERFACE multiqueue::multiqueue)
 target_compile_definitions(dr_pq INTERFACE DR_PQ_PQ)
+
+add_library(dr_pq_buffered INTERFACE)
+target_compile_definitions(dr_pq_buffered INTERFACE DR_PQ_PQ DR_PQ_USE_BUFFERS)
 
 set(COMPETITORS
     ${MQ_VARIANTS}
@@ -207,6 +209,7 @@ set(COMPETITORS
     locked_pq
     mq_pq
     dr_pq
+    dr_pq_buffered
     PARENT_SCOPE)
 
 set(GENERIC_COMPETITORS
