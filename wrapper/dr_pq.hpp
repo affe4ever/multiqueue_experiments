@@ -218,6 +218,20 @@ class DR_PQ {
                       << "  Percentile (index 0): " << percentile_ << "\n\n";
         }
 
+        // Sample a rank index given the current tree size.
+        // When stddev is effectively zero the distribution is degenerate and
+        // calling it is UB.  Instead pin directly to round(mean_) and fall
+        // back to the nearest legal rank if the tree is too small to satisfy it.
+        int sample_index(std::size_t tree_size,
+                         std::mt19937& gen,
+                         std::normal_distribution<double>& dist) const {
+            const int max_index = static_cast<int>(tree_size) - 1;
+            const int index = (stddev_ < std::numeric_limits<double>::epsilon())
+                              ? static_cast<int>(std::round(mean_))
+                              : static_cast<int>(std::round(dist(gen)));
+            return std::clamp(index, 0, max_index);
+        }
+
         void push(value_type const& value) {
             auto guard = make_guard();
             pq_.insert(value);
@@ -226,8 +240,7 @@ class DR_PQ {
         std::optional<value_type> try_pop() {
             auto guard = make_guard();
             if (pq_.empty()) return std::nullopt;
-            int index = static_cast<int>(std::round(dist_(gen_)));
-            index = std::clamp(index, 0, static_cast<int>(pq_.size() - 1));
+            const int index = sample_index(pq_.size(), gen_, dist_);
             value_type value = *pq_.select_by_rank(static_cast<std::size_t>(index));
             pq_.erase_by_rank(static_cast<std::size_t>(index));
             return value;
@@ -240,8 +253,7 @@ class DR_PQ {
             auto guard = make_guard();
             flush(buf);
             if (pq_.empty()) return std::nullopt;
-            int index = static_cast<int>(std::round(dist(gen)));
-            index = std::clamp(index, 0, static_cast<int>(pq_.size() - 1));
+            const int index = sample_index(pq_.size(), gen, dist);
             value_type value = *pq_.select_by_rank(static_cast<std::size_t>(index));
             pq_.erase_by_rank(static_cast<std::size_t>(index));
             return value;
