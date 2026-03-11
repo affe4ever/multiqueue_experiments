@@ -7,6 +7,7 @@
 struct Metrics {
     std::size_t rank_error;
     std::size_t delay;
+    std::size_t pq_size;
 };
 
 struct Temp {
@@ -22,9 +23,9 @@ struct Temp {
 };
 
 void write_metrics(std::ostream& out, std::vector<Metrics> const& metrics) {
-    out << "rank_error,delay\n";
+    out << "rank_error,delay, pq_size\n";
     for (auto const& m : metrics) {
-        out << m.rank_error << ',' << m.delay << '\n';
+        out << m.rank_error << ',' << m.delay << ',' << m.pq_size << '\n';
     }
 }
 
@@ -121,12 +122,11 @@ Temp replay(Log const& log) {
                       << '\n';
             std::abort();
         }
-        --current_pq_size;
         
         // Add up the rank and delay
         total_rank += rank;
         total_delay += delay;
-
+        
         if (rank > largest_rank) {
             largest_rank = rank;
         }
@@ -139,8 +139,10 @@ Temp replay(Log const& log) {
         if (delay < smallest_delay) {
             smallest_delay = delay;
         }
-
-        metrics.push_back({rank, delay});
+        
+        metrics.push_back({rank, delay, current_pq_size});
+        
+        --current_pq_size;
     }
 
     temp.metrics = metrics;
