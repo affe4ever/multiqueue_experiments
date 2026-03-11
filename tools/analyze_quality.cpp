@@ -23,7 +23,7 @@ struct Temp {
 };
 
 void write_metrics(std::ostream& out, std::vector<Metrics> const& metrics) {
-    out << "rank_error,delay, pq_size\n";
+    out << "rank_error,delay,pq_size\n";
     for (auto const& m : metrics) {
         out << m.rank_error << ',' << m.delay << ',' << m.pq_size << '\n';
     }
