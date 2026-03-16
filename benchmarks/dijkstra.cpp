@@ -26,6 +26,7 @@
 #include <limits>
 #include <memory>
 #include <numeric>
+#include <queue>
 #include <type_traits>
 #include <vector>
 
@@ -174,38 +175,51 @@ void process_node(node_type const& node, handle_type& handle, Counter& counter, 
 
 #ifdef LOG_OPERATIONS
 void write_log(std::vector<ThreadData> const& thread_data, std::ostream& out) {
-    struct Operation {
-        std::chrono::steady_clock::time_point timestamp;
-        std::pair<unsigned long, unsigned long> element;  // {distance, node_id}
-        bool is_push;
-    };
-
-    std::vector<Operation> all_ops;
-
-    // Collect all operations from all threads
-    for (auto const& td : thread_data) {
-        for (auto const& push : td.pushes) {
-            all_ops.push_back({push.timestamp, push.element, true});
-        }
-        for (auto const& pop : td.pops) {
-            all_ops.push_back({pop.timestamp, pop.element, false});
-        }
-    }
-
-    // Sort by timestamp
-    std::sort(all_ops.begin(), all_ops.end(), [](auto const& a, auto const& b) { return a.timestamp < b.timestamp; });
-
-    // Count operations
+    // First pass: count total operations without buffering all at once
     std::size_t num_pushes = 0;
     std::size_t num_pops = 0;
-    for (auto const& op : all_ops) {
-        if (op.is_push)
-            ++num_pushes;
-        else
-            ++num_pops;
+    for (auto const& td : thread_data) {
+        num_pushes += td.pushes.size();
+        num_pops += td.pops.size();
     }
 
     out << num_pushes << ' ' << num_pops << '\n';
+    out.flush();
+
+    // Stream-write without intermediate vectors: use priority queue with indices
+    // to merge sorted streams from each thread
+    
+    struct OpRef {
+        std::chrono::steady_clock::time_point timestamp;
+        std::size_t thread_id;
+        bool is_push;
+        std::size_t index;  // Index in pushes or pops array
+        
+        // For priority queue ordering
+        bool operator>(const OpRef& other) const {
+            return timestamp > other.timestamp;
+        }
+    };
+
+    // Priority queue to merge operations from all threads
+    std::priority_queue<OpRef, std::vector<OpRef>, std::greater<OpRef>> pq;
+    std::vector<std::size_t> push_indices(thread_data.size(), 0);
+    std::vector<std::size_t> pop_indices(thread_data.size(), 0);
+
+    // Initialize priority queue with first push/pop from each thread
+    for (std::size_t t = 0; t < thread_data.size(); ++t) {
+        auto const& td = thread_data[t];
+        
+        // Add first push if exists
+        if (!td.pushes.empty()) {
+            pq.push({td.pushes[0].timestamp, t, true, 0});
+        }
+        
+        // Add first pop if exists
+        if (!td.pops.empty()) {
+            pq.push({td.pops[0].timestamp, t, false, 0});
+        }
+    }
 
     // Hash function for element pairs
     struct PairHash {
@@ -216,22 +230,47 @@ void write_log(std::vector<ThreadData> const& thread_data, std::ostream& out) {
 
     // Map elements to their push indices (FIFO queue per element)
     std::unordered_map<std::pair<unsigned long, unsigned long>, std::deque<std::size_t>, PairHash> element_to_indices;
-
     std::size_t push_index = 0;
 
-    for (auto const& op : all_ops) {
+    // Process operations in timestamp order via priority queue
+    while (!pq.empty()) {
+        OpRef op = pq.top();
+        pq.pop();
+
+        std::size_t t = op.thread_id;
+        auto const& td = thread_data[t];
+
         if (op.is_push) {
-            out << '+' << op.element.first << '\n';  // Output distance as key
-            element_to_indices[op.element].push_back(push_index);
+            auto const& push = td.pushes[op.index];
+            out << '+' << push.element.first << '\n';
+            element_to_indices[push.element].push_back(push_index);
             ++push_index;
+            
+            // Add next push from this thread
+            if (op.index + 1 < td.pushes.size()) {
+                pq.push({td.pushes[op.index + 1].timestamp, t, true, op.index + 1});
+            }
         } else {
-            // Find the corresponding push index
-            auto it = element_to_indices.find(op.element);
+            auto const& pop = td.pops[op.index];
+            auto it = element_to_indices.find(pop.element);
             if (it != element_to_indices.end() && !it->second.empty()) {
                 out << '-' << it->second.front() << '\n';
                 it->second.pop_front();
+                
+                // Erase entry when deque becomes empty to avoid memory bloat
+                // This limits map size to max pending pushes, not total pushes
+                if (it->second.empty()) {
+                    element_to_indices.erase(it);
+                }
+            }
+            
+            // Add next pop from this thread
+            if (op.index + 1 < td.pops.size()) {
+                pq.push({td.pops[op.index + 1].timestamp, t, false, op.index + 1});
             }
         }
+        
+        out.flush();  // Flush frequently to avoid buffer buildup
     }
 }
 #endif
@@ -242,7 +281,7 @@ void write_log(std::vector<ThreadData> const& thread_data, std::ostream& out) {
     auto handle = pq.get_handle();
 #ifdef LOG_OPERATIONS
     ThreadData thread_data;
-    // Reserve space for logs
+    // Reserve space for logs - pre-allocation avoids expensive reallocations during execution
     thread_data.pushes.reserve(data.graph.num_edges());
     thread_data.pops.reserve(data.graph.num_nodes());
 #endif
