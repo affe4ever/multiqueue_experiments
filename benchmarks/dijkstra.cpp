@@ -242,7 +242,7 @@ void write_log(std::vector<ThreadData> const& thread_data, std::ostream& out) {
 
         if (op.is_push) {
             auto const& push = td.pushes[op.index];
-            out << '+' << push.element.first << '\n';
+            out << '+' << push.element.first << ' ' << push.element.second << '\n';
             element_to_indices[push.element].push_back(push_index);
             ++push_index;
             
@@ -254,7 +254,7 @@ void write_log(std::vector<ThreadData> const& thread_data, std::ostream& out) {
             auto const& pop = td.pops[op.index];
             auto it = element_to_indices.find(pop.element);
             if (it != element_to_indices.end() && !it->second.empty()) {
-                out << '-' << it->second.front() << '\n';
+                out << '-' << it->second.front() << ' ' << pop.element.second << '\n';
                 it->second.pop_front();
                 
                 // Erase entry when deque becomes empty to avoid memory bloat

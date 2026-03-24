@@ -8,6 +8,7 @@ struct Metrics {
     std::size_t rank_error;
     std::size_t delay;
     std::size_t pq_size;
+    std::size_t node_id;
 };
 
 struct Temp {
@@ -23,9 +24,9 @@ struct Temp {
 };
 
 void write_metrics(std::ostream& out, std::vector<Metrics> const& metrics) {
-    out << "rank_error,delay,pq_size\n";
+    out << "rank_error,delay,pq_size,node_id\n";
     for (auto const& m : metrics) {
-        out << m.rank_error << ',' << m.delay << ',' << m.pq_size << '\n';
+        out << m.rank_error << ',' << m.delay << ',' << m.pq_size << ',' << m.node_id << '\n';
     }
 }
 
@@ -34,6 +35,7 @@ struct Log {
     struct Pop {
         std::size_t push_index;
         std::size_t ref_index;
+        std::size_t node_id;
     };
     std::vector<key_type> keys;
     std::vector<Pop> pops;
@@ -47,22 +49,24 @@ Log read_log(std::istream& in) {
     Log log;
     log.keys.reserve(num_pushes);
     log.pops.reserve(num_pops);
-    for (std::size_t i = 0; i < num_pops; ++i) {
-        in.ignore();
-        while (in.get() == '+') {
-            Log::key_type key;  // NOLINT
-            in >> key;
+    
+    std::size_t push_index = 0;
+    char op_type;
+    while (in >> op_type) {
+        if (op_type == '+') {
+            Log::key_type key;
+            std::size_t node_id;
+            in >> key >> node_id;
             log.keys.push_back(key);
-            in.ignore();
+            ++push_index;
+        } else if (op_type == '-') {
+            std::size_t ref_idx, node_id;
+            in >> ref_idx >> node_id;
+            if (ref_idx >= push_index) {
+                ++invalid_pops;
+            }
+            log.pops.push_back({push_index, ref_idx, node_id});
         }
-        std::size_t index;  // NOLINT
-        in >> index;
-        std::size_t push_index = log.keys.size();
-        if (index >= log.keys.size()) {
-            ++invalid_pops;
-            push_index = index + 1;
-        }
-        log.pops.push_back({push_index, index});
     }
     std::cerr << "Invalid pops: " << invalid_pops << '\n';
     return log;
@@ -140,7 +144,7 @@ Temp replay(Log const& log) {
             smallest_delay = delay;
         }
         
-        metrics.push_back({rank, delay, current_pq_size});
+        metrics.push_back({rank, delay, current_pq_size, pop.node_id});
         
         --current_pq_size;
     }
