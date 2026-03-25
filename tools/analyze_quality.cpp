@@ -2,6 +2,7 @@
 #include <cstddef>
 #include <iostream>
 #include <vector>
+#include <unordered_map>
 #include "replay_tree.hpp"
 
 struct Metrics {
@@ -9,6 +10,7 @@ struct Metrics {
     std::size_t delay;
     std::size_t pq_size;
     std::size_t node_id;
+    int is_redundant;
 };
 
 struct Temp {
@@ -24,9 +26,9 @@ struct Temp {
 };
 
 void write_metrics(std::ostream& out, std::vector<Metrics> const& metrics) {
-    out << "rank_error,delay,pq_size,node_id\n";
+    out << "rank_error,delay,pq_size,node_id,is_redundant\n";
     for (auto const& m : metrics) {
-        out << m.rank_error << ',' << m.delay << ',' << m.pq_size << ',' << m.node_id << '\n';
+        out << m.rank_error << ',' << m.delay << ',' << m.pq_size << ',' << m.node_id << ',' << m.is_redundant << '\n';
     }
 }
 
@@ -39,6 +41,7 @@ struct Log {
     };
     std::vector<key_type> keys;
     std::vector<Pop> pops;
+    std::unordered_map<std::size_t, key_type> min_distance;
 };
 
 Log read_log(std::istream& in) {
@@ -58,6 +61,14 @@ Log read_log(std::istream& in) {
             std::size_t node_id;
             in >> key >> node_id;
             log.keys.push_back(key);
+            
+            // Track minimum distance per node (single unordered_map operation)
+            auto& min_dist = log.min_distance[node_id];
+            if (min_dist == 0) {
+                min_dist = key;
+            } else {
+                min_dist = std::min(min_dist, key);
+            }
             ++push_index;
         } else if (op_type == '-') {
             std::size_t ref_idx, node_id;
@@ -144,7 +155,16 @@ Temp replay(Log const& log) {
             smallest_delay = delay;
         }
         
-        metrics.push_back({rank, delay, current_pq_size, pop.node_id});
+        // Check if this push was redundant (had worse distance than minimum for this node)
+        int is_redundant = 0;
+        if (pop.ref_index < log.keys.size()) {
+            auto pushed_distance = log.keys[pop.ref_index];
+            auto it = log.min_distance.find(pop.node_id);
+            if (it != log.min_distance.end()) {
+                is_redundant = (pushed_distance > it->second) ? 1 : 0;
+            }
+        }
+        metrics.push_back({rank, delay, current_pq_size, pop.node_id, is_redundant});
         
         --current_pq_size;
     }
