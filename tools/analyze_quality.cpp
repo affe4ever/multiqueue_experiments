@@ -10,7 +10,8 @@ struct Metrics {
     std::size_t delay;
     std::size_t pq_size;
     std::size_t node_id;
-    int is_redundant;
+    int ignored_node;
+    int extra_work;
 };
 
 struct Temp {
@@ -26,9 +27,9 @@ struct Temp {
 };
 
 void write_metrics(std::ostream& out, std::vector<Metrics> const& metrics) {
-    out << "rank_error,delay,pq_size,node_id,is_redundant\n";
+    out << "rank_error,delay,pq_size,node_id,ignored_node,extra_work\n";
     for (auto const& m : metrics) {
-        out << m.rank_error << ',' << m.delay << ',' << m.pq_size << ',' << m.node_id << ',' << m.is_redundant << '\n';
+        out << m.rank_error << ',' << m.delay << ',' << m.pq_size << ',' << m.node_id << ',' << m.ignored_node << ',' << m.extra_work  << '\n';
     }
 }
 
@@ -57,8 +58,8 @@ Log read_log(std::istream& in) {
     char op_type;
     while (in >> op_type) {
         if (op_type == '+') {
-            Log::key_type key;
             std::size_t node_id;
+            Log::key_type key;
             in >> key >> node_id;
             log.keys.push_back(key);
             
@@ -71,7 +72,8 @@ Log read_log(std::istream& in) {
             }
             ++push_index;
         } else if (op_type == '-') {
-            std::size_t ref_idx, node_id;
+            std::size_t node_id;
+            std::size_t ref_idx;
             in >> ref_idx >> node_id;
             if (ref_idx >= push_index) {
                 ++invalid_pops;
@@ -104,22 +106,24 @@ Temp replay(Log const& log) {
 
     ReplayTree<Log::key_type, HeapElement, ExtractKey> replay_tree{};
     std::vector<Metrics> metrics;
+    std::unordered_map<std::size_t, Log::key_type> current_dist;
 
-    // init vars
+    // Init vars
     Temp temp;
     std::size_t total_rank = 0;
     std::size_t total_delay = 0;
     std::size_t largest_rank = 0;
-    std::size_t smallest_rank = INFINITY;
+    std::size_t smallest_rank = std::numeric_limits<std::size_t>::max();
     std::size_t largest_delay = 0;
-    std::size_t smallest_delay = INFINITY;
+    std::size_t smallest_delay = std::numeric_limits<std::size_t>::max();
     std::size_t sum_pq_sizes = 0;
     std::size_t max_pq_size = 0;
     std::size_t current_pq_size = 0;
-
     std::size_t pop_size = log.pops.size();
     metrics.reserve(pop_size);
+
     std::size_t push_index = 0;
+
     for (auto const& pop : log.pops) {
         for (; push_index < pop.push_index; ++push_index) {
             replay_tree.insert({log.keys[push_index], push_index});
@@ -155,16 +159,26 @@ Temp replay(Log const& log) {
             smallest_delay = delay;
         }
         
-        // Check if this push was redundant (had worse distance than minimum for this node)
-        int is_redundant = 0;
+        int ignored_node = 0;
+        int extra_work = 0;
         if (pop.ref_index < log.keys.size()) {
             auto pushed_distance = log.keys[pop.ref_index];
-            auto it = log.min_distance.find(pop.node_id);
-            if (it != log.min_distance.end()) {
-                is_redundant = (pushed_distance > it->second) ? 1 : 0;
+            auto it = current_dist.find(pop.node_id);
+            if (it == current_dist.end()) {
+                // First time seeing this node, init and don't mark as extra_work
+                current_dist[pop.node_id] = pushed_distance;
+            } else {
+                if (pushed_distance < it->second) {
+                    // Improved distance for this node
+                    it->second = pushed_distance;
+                    extra_work = 1;
+                } else {
+                    // Worse or equal distance than current best
+                    ignored_node = 1;
+                }
             }
         }
-        metrics.push_back({rank, delay, current_pq_size, pop.node_id, is_redundant});
+        metrics.push_back({rank, delay, current_pq_size, pop.node_id, ignored_node, extra_work});
         
         --current_pq_size;
     }
