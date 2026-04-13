@@ -134,6 +134,11 @@ void push_with_logging(handle_type& handle, unsigned long distance, unsigned lon
         thread_data.pushes.push_back({{distance, node_id}, timestamp});
     }
 }
+
+void push_ignored(unsinged long distance, unsigned long node_id, ThreadData& thread_data) {
+    auto timestamp = std::chrono::stead_clock::now();
+    thread_data.pushes.push_back({{distance, node_id}, timestamp});
+}
 #endif
 
 void process_node(node_type const& node, handle_type& handle, Counter& counter, SharedData& data
@@ -143,8 +148,14 @@ void process_node(node_type const& node, handle_type& handle, Counter& counter, 
 #endif
 ) {
     auto current_distance = data.distances[node.second].value.load(std::memory_order_relaxed);
-    if (static_cast<long long>(node.first) > current_distance) {
+    auto new_distance = static_cast<long long>(node.first);
+    if (new_distance > current_distance) {
         ++counter.ignored_nodes;
+#ifdef LOG_OPERATIONS
+        auto i = data.graph.nodes[node.second];
+        auto node_id = data.graph.edges[i].target;
+        push_ignored(new_distance, node_id, thread_data)
+#endif
         return;
     }
     for (auto i = data.graph.nodes[node.second]; i < data.graph.nodes[node.second + 1]; ++i) {
