@@ -151,7 +151,7 @@ ReplayResult replay(Log const& log) {
             } else if (pop_dist < node_entry->second) {
                 node_entry->second = pop_dist;
                 extra_work = 1;
-            } else { //if (pop_dist > node_entry->second) 
+            } else if (pop_dist > node_entry->second) {
                 ignored_node = 1;
             }
         }
