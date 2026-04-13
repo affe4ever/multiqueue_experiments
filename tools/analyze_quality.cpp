@@ -53,29 +53,27 @@ Log read_log(std::istream& in) {
     Log log;
     log.keys.reserve(num_pushes);
     log.pops.reserve(num_pops);
-
-    std::size_t push_index = 0;
     char op;
     while (in >> op) {
         if (op == '+') {
             std::size_t node_id;
             Log::key_type key;
             in >> key >> node_id;
-            log.keys.push_back(key);
-
             auto& min_dist = log.min_distance[node_id];
             if (min_dist == 0) {
                 min_dist = key;
             } else {
                 min_dist = std::min(min_dist, key);
             }
-            ++push_index;
+            log.keys.push_back(key);
         } else if (op == '-') {
             std::size_t node_id;
             std::size_t index;
             in >> index >> node_id;
+            std::size_t push_index = log.keys.size();
             if (index >= push_index) {
                 ++invalid_pops;
+                push_index = index + 1;
             }
             log.pops.push_back({push_index, index, node_id});
         }
@@ -136,7 +134,6 @@ ReplayResult replay(Log const& log) {
                       << '\n';
             std::abort();
         }
-
         total_rank += rank;
         total_delay += delay;
         largest_rank = std::max(largest_rank, rank);
@@ -147,14 +144,14 @@ ReplayResult replay(Log const& log) {
         int ignored_node = 0;
         int extra_work = 0;
         if (pop.ref_index < log.keys.size()) {
-            auto pushed_distance = log.keys[pop.ref_index];
-            auto it = node_dist.find(pop.node_id);
-            if (it == node_dist.end()) {
-                node_dist[pop.node_id] = pushed_distance;
-            } else if (pushed_distance < it->second) {
-                it->second = pushed_distance;
+            auto pop_dist = log.keys[pop.ref_index];
+            auto node_entry = node_dist.find(pop.node_id);
+            if (node_entry == node_dist.end()) {
+                node_dist[pop.node_id] = pop_dist;
+            } else if (pop_dist < node_entry->second) {
+                node_entry->second = pop_dist;
                 extra_work = 1;
-            } else {
+            } else { //if (pop_dist > node_entry->second) 
                 ignored_node = 1;
             }
         }
