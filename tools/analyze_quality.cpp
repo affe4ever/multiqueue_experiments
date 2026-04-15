@@ -68,7 +68,7 @@ Log read_log(std::istream& in) {
                 min_dist = std::min(min_dist, key);
             }
             log.keys.push_back(key);
-        } else if (op == '-') {
+        } else if (op == '-' || op == '=') {
             std::size_t node_id;
             std::size_t index;
             in >> index >> node_id;
@@ -77,18 +77,9 @@ Log read_log(std::istream& in) {
                 ++invalid_pops;
                 push_index = index + 1;
             }
-            log.pops.push_back({push_index, index, node_id, false});
-        } else if (op == '=') {
-            std::size_t node_id;
-            std::size_t index;
-            in >> index >> node_id;
-            std::size_t push_index = log.keys.size();
-            if (index >= push_index) {
-                ++invalid_pops;
-                push_index = index + 1;
-            }
-            log.pops.push_back({push_index, index, node_id, true});
-        } 
+            bool ignored = (op == '=');
+            log.pops.push_back({push_index, index, node_id, ignored});
+        }
     }
     std::cerr << "Invalid pops: " << invalid_pops << '\n';
     return log;

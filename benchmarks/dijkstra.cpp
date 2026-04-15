@@ -143,7 +143,8 @@ void push_with_logging(handle_type& handle, unsigned long distance, unsigned lon
 
 void process_node(node_type const& node, handle_type& handle, Counter& counter, SharedData& data
 #ifdef LOG_OPERATIONS
-                  , ThreadData& thread_data, std::chrono::steady_clock::time_point pop_timestamp
+                  , 
+                  ThreadData& thread_data, std::chrono::steady_clock::time_point pop_timestamp
 #endif
 ) {
     auto current_distance = data.distances[node.second].value.load(std::memory_order_relaxed);
@@ -316,7 +317,6 @@ void write_log(std::vector<ThreadData> const& thread_data, std::ostream& out) {
     auto handle = pq.get_handle();
 #ifdef LOG_OPERATIONS
     ThreadData thread_data;
-    // Reserve space for logs - pre-allocation avoids expensive reallocations during execution
     thread_data.pushes.reserve(data.graph.num_edges());
     thread_data.pops.reserve(data.graph.num_nodes());
 #endif
@@ -342,7 +342,6 @@ void write_log(std::vector<ThreadData> const& thread_data, std::ostream& out) {
 #ifdef LOG_OPERATIONS
             if (has_value) {
                 pop_timestamp = std::chrono::steady_clock::now();
-                //thread_data.pops.push_back({{node->first, node->second}, timestamp});
             }
 #endif
             return has_value;
