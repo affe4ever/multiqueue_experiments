@@ -105,7 +105,7 @@ ReplayResult replay(Log const& log) {
 
     ReplayTree<Log::key_type, HeapElement, ExtractKey> replay_tree{};
     std::vector<Metrics> metrics;
-    std::unordered_map<std::size_t, Log::key_type> node_dist;
+    //std::unordered_map<std::size_t, Log::key_type> distances;
 
     std::size_t num_pops = log.pops.size();
     std::size_t total_rank = 0;
@@ -148,11 +148,8 @@ ReplayResult replay(Log const& log) {
         int extra_work = 0;
         if (pop.ref_index < log.keys.size()) {
             auto pop_dist = log.keys[pop.ref_index];
-            auto node_entry = node_dist.find(pop.node_id);
-            if (node_entry == node_dist.end()) {
-                node_dist[pop.node_id] = pop_dist;
-            } else if (pop_dist < node_entry->second) {
-                node_entry->second = pop_dist;
+            auto min_dist = log.min_distance.find(pop.node_id)->second;
+            if (pop_dist > min_dist){
                 extra_work = 1;
             }
             if (pop.ignored == true) {
