@@ -148,8 +148,8 @@ ReplayResult replay(Log const& log) {
         int extra_work = 0;
         if (pop.ref_index < log.keys.size()) {
             auto pop_dist = log.keys[pop.ref_index];
-            auto min_dist = log.min_distance.find(pop.node_id)->second;
-            if (pop_dist > min_dist){
+            auto min_dist_it = log.min_distance.find(pop.node_id);
+            if (min_dist_it != log.min_distance.end() && pop_dist > min_dist_it->second) {
                 extra_work = 1;
             }
             if (pop.ignored == true) {
