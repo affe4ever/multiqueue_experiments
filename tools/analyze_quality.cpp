@@ -39,6 +39,7 @@ struct Log {
         std::size_t push_index;
         std::size_t ref_index;
         std::size_t node_id;
+        bool ignored;
     };
     std::vector<key_type> keys;
     std::vector<Pop> pops;
@@ -48,8 +49,9 @@ struct Log {
 Log read_log(std::istream& in) {
     std::size_t num_pushes = 0;
     std::size_t num_pops = 0;
+    std::size_t num_ignores = 0;
     long long invalid_pops = 0;
-    in >> num_pushes >> num_pops;
+    in >> num_pushes >> num_pops >> num_ignores;
     Log log;
     log.keys.reserve(num_pushes);
     log.pops.reserve(num_pops);
@@ -75,8 +77,18 @@ Log read_log(std::istream& in) {
                 ++invalid_pops;
                 push_index = index + 1;
             }
-            log.pops.push_back({push_index, index, node_id});
-        }
+            log.pops.push_back({push_index, index, node_id, false});
+        } else if (op == '=') {
+            std::size_t node_id;
+            std::size_t index;
+            in >> index >> node_id;
+            std::size_t push_index = log.keys.size();
+            if (index >= push_index) {
+                ++invalid_pops;
+                push_index = index + 1;
+            }
+            log.pops.push_back({push_index, index, node_id, true});
+        } 
     }
     std::cerr << "Invalid pops: " << invalid_pops << '\n';
     return log;
@@ -151,7 +163,8 @@ ReplayResult replay(Log const& log) {
             } else if (pop_dist < node_entry->second) {
                 node_entry->second = pop_dist;
                 extra_work = 1;
-            } else if (pop_dist > node_entry->second) {
+            }
+            if (pop.ignored == true) {
                 ignored_node = 1;
             }
         }
