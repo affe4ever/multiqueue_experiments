@@ -106,8 +106,13 @@ struct ThreadData {
         std::pair<unsigned long, unsigned long> element;  // {distance, node_id}
         std::chrono::steady_clock::time_point timestamp;
     };
+    struct IgnoreLog {
+        std::pair<unsigned long, unsigned long> element;  // {distance, node_id}
+        std::chrono::steady_clock::time_point timestamp;  
+    };
     std::vector<PushLog> pushes;
     std::vector<PopLog> pops;
+    std::vector<IgnoreLog> ignores;
 };
 #endif
 
@@ -134,17 +139,11 @@ void push_with_logging(handle_type& handle, unsigned long distance, unsigned lon
         thread_data.pushes.push_back({{distance, node_id}, timestamp});
     }
 }
-
-void push_ignored(unsinged long distance, unsigned long node_id, ThreadData& thread_data) {
-    auto timestamp = std::chrono::stead_clock::now();
-    thread_data.pushes.push_back({{distance, node_id}, timestamp});
-}
 #endif
 
 void process_node(node_type const& node, handle_type& handle, Counter& counter, SharedData& data
 #ifdef LOG_OPERATIONS
-                  ,
-                  ThreadData& thread_data
+                  , ThreadData& thread_data, std::chrono::steady_clock::time_point pop_timestamp
 #endif
 ) {
     auto current_distance = data.distances[node.second].value.load(std::memory_order_relaxed);
@@ -152,12 +151,13 @@ void process_node(node_type const& node, handle_type& handle, Counter& counter, 
     if (new_distance > current_distance) {
         ++counter.ignored_nodes;
 #ifdef LOG_OPERATIONS
-        auto i = data.graph.nodes[node.second];
-        auto node_id = data.graph.edges[i].target;
-        push_ignored(new_distance, node_id, thread_data)
+        thread_data.ignores.push_back({{node.first, node.second}, pop_timestamp});
 #endif
         return;
     }
+#ifdef LOG_OPERATIONS
+    thread_data.pops.push_back({{node.first, node.second}, pop_timestamp});
+#endif
     for (auto i = data.graph.nodes[node.second]; i < data.graph.nodes[node.second + 1]; ++i) {
         auto target = data.graph.edges[i].target;
         auto d = static_cast<long long>(node.first) + data.graph.edges[i].weight;
@@ -189,22 +189,26 @@ void write_log(std::vector<ThreadData> const& thread_data, std::ostream& out) {
     // First pass: count total operations without buffering all at once
     std::size_t num_pushes = 0;
     std::size_t num_pops = 0;
+    std::size_t num_ignores = 0;
     for (auto const& td : thread_data) {
         num_pushes += td.pushes.size();
         num_pops += td.pops.size();
+        num_ignores += td.ignores.size();
     }
 
-    out << num_pushes << ' ' << num_pops << '\n';
+    out << num_pushes << ' ' << num_pops << ' ' << num_ignores << '\n';
     out.flush();
 
     // Stream-write without intermediate vectors: use priority queue with indices
     // to merge sorted streams from each thread
     
+    enum OpType { OP_PUSH, OP_POP, OP_IGNORE };
+    
     struct OpRef {
         std::chrono::steady_clock::time_point timestamp;
         std::size_t thread_id;
-        bool is_push;
-        std::size_t index;  // Index in pushes or pops array
+        OpType op_type;
+        std::size_t index;  // Index in pushes, pops, or ignores array
         
         // For priority queue ordering
         bool operator>(const OpRef& other) const {
@@ -214,21 +218,24 @@ void write_log(std::vector<ThreadData> const& thread_data, std::ostream& out) {
 
     // Priority queue to merge operations from all threads
     std::priority_queue<OpRef, std::vector<OpRef>, std::greater<OpRef>> pq;
-    std::vector<std::size_t> push_indices(thread_data.size(), 0);
-    std::vector<std::size_t> pop_indices(thread_data.size(), 0);
 
-    // Initialize priority queue with first push/pop from each thread
+    // Initialize priority queue with first push/pop/ignore from each thread
     for (std::size_t t = 0; t < thread_data.size(); ++t) {
         auto const& td = thread_data[t];
         
         // Add first push if exists
         if (!td.pushes.empty()) {
-            pq.push({td.pushes[0].timestamp, t, true, 0});
+            pq.push({td.pushes[0].timestamp, t, OP_PUSH, 0});
         }
         
         // Add first pop if exists
         if (!td.pops.empty()) {
-            pq.push({td.pops[0].timestamp, t, false, 0});
+            pq.push({td.pops[0].timestamp, t, OP_POP, 0});
+        }
+        
+        // Add first ignore if exists
+        if (!td.ignores.empty()) {
+            pq.push({td.ignores[0].timestamp, t, OP_IGNORE, 0});
         }
     }
 
@@ -251,7 +258,7 @@ void write_log(std::vector<ThreadData> const& thread_data, std::ostream& out) {
         std::size_t t = op.thread_id;
         auto const& td = thread_data[t];
 
-        if (op.is_push) {
+        if (op.op_type == OP_PUSH) {
             auto const& push = td.pushes[op.index];
             out << '+' << push.element.first << ' ' << push.element.second << '\n';
             element_to_indices[push.element].push_back(push_index);
@@ -259,9 +266,9 @@ void write_log(std::vector<ThreadData> const& thread_data, std::ostream& out) {
             
             // Add next push from this thread
             if (op.index + 1 < td.pushes.size()) {
-                pq.push({td.pushes[op.index + 1].timestamp, t, true, op.index + 1});
+                pq.push({td.pushes[op.index + 1].timestamp, t, OP_PUSH, op.index + 1});
             }
-        } else {
+        } else if (op.op_type == OP_POP) {
             auto const& pop = td.pops[op.index];
             auto it = element_to_indices.find(pop.element);
             if (it != element_to_indices.end() && !it->second.empty()) {
@@ -277,7 +284,24 @@ void write_log(std::vector<ThreadData> const& thread_data, std::ostream& out) {
             
             // Add next pop from this thread
             if (op.index + 1 < td.pops.size()) {
-                pq.push({td.pops[op.index + 1].timestamp, t, false, op.index + 1});
+                pq.push({td.pops[op.index + 1].timestamp, t, OP_POP, op.index + 1});
+            }
+        } else if (op.op_type == OP_IGNORE) {
+            auto const& ignore = td.ignores[op.index];
+            auto it = element_to_indices.find(ignore.element);
+            if (it != element_to_indices.end() && !it->second.empty()) {
+                out << '=' << it->second.front() << ' ' << ignore.element.second << '\n';
+                it->second.pop_front();
+                
+                // Erase entry when deque becomes empty to avoid memory bloat
+                if (it->second.empty()) {
+                    element_to_indices.erase(it);
+                }
+            }
+            
+            // Add next ignore from this thread
+            if (op.index + 1 < td.ignores.size()) {
+                pq.push({td.ignores[op.index + 1].timestamp, t, OP_IGNORE, op.index + 1});
             }
         }
         
@@ -309,18 +333,22 @@ void write_log(std::vector<ThreadData> const& thread_data, std::ostream& out) {
     thread_context.synchronize();
     while (true) {
         std::optional<node_type> node;
+#ifdef LOG_OPERATIONS
+        std::chrono::steady_clock::time_point pop_timestamp;
+#endif
         while (data.termination_detection.repeat([&]() {
             node = handle.try_pop();
+            bool has_value = node.has_value();
 #ifdef LOG_OPERATIONS
-            if (node.has_value()) {
-                auto timestamp = std::chrono::steady_clock::now();
-                thread_data.pops.push_back({{node->first, node->second}, timestamp});
+            if (has_value) {
+                pop_timestamp = std::chrono::steady_clock::now();
+                //thread_data.pops.push_back({{node->first, node->second}, timestamp});
             }
 #endif
-            return node.has_value();
+            return has_value;
         })) {
 #ifdef LOG_OPERATIONS
-            process_node(*node, handle, counter, data, thread_data);
+            process_node(*node, handle, counter, data, thread_data, pop_timestamp);
 #else
             process_node(*node, handle, counter, data);
 #endif
@@ -346,7 +374,11 @@ void write_log(std::vector<ThreadData> const& thread_data, std::ostream& out) {
 
 void run_benchmark() {
     std::clog << "Reading graph...\n";
-    SharedData shared_data{{}, {}, termination_detection::TerminationDetection(settings.num_threads)};
+    SharedData shared_data{{}, {}, termination_detection::TerminationDetection(settings.num_threads), {}
+#ifdef LOG_OPERATIONS
+        , {}
+#endif
+    };
     try {
         shared_data.graph = Graph(settings.graph_file);
     } catch (std::runtime_error const& e) {
