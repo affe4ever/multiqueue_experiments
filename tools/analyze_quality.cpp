@@ -12,6 +12,7 @@ struct Metrics {
     std::size_t node_id;
     int ignored_node;
     int extra_work;
+    int extra_work_generated;
 };
 
 struct ReplayResult {
@@ -27,29 +28,36 @@ struct ReplayResult {
 };
 
 void write_metrics(std::ostream& out, std::vector<Metrics> const& metrics) {
-    out << "rank_error,delay,pq_size,node_id,ignored_node,extra_work\n";
+    out << "rank_error,delay,pq_size,node_id,ignored_node,extra_work,extra_work_generated\n";
     for (auto const& m : metrics) {
-        out << m.rank_error << ',' << m.delay << ',' << m.pq_size << ',' << m.node_id << ',' << m.ignored_node << ',' << m.extra_work << '\n';
+        out << m.rank_error << ',' << m.delay << ',' << m.pq_size << ',' << m.node_id << ','
+            << m.ignored_node << ',' << m.extra_work << ',' << m.extra_work_generated << '\n';
     }
 }
 
+using pop_id_t = unsigned long;
 struct Log {
     using key_type = long long;
+
     struct Pop {
         std::size_t push_index;
         std::size_t ref_index;
         std::size_t node_id;
         bool ignored;
+        pop_id_t pop_id;
     };
-    std::vector<key_type> keys;
+
+    std::vector<std::pair<key_type, pop_id_t>> keys;
     std::vector<Pop> pops;
     std::unordered_map<std::size_t, key_type> min_distance;
+    std::unordered_map<std::size_t, pop_id_t> pop_id_to_index;
 };
 
 Log read_log(std::istream& in) {
     std::size_t num_pushes = 0;
     std::size_t num_pops = 0;
     std::size_t num_ignores = 0;
+    pop_id_t pop_id;
     long long invalid_pops = 0;
     in >> num_pushes >> num_pops >> num_ignores;
     Log log;
@@ -60,25 +68,28 @@ Log read_log(std::istream& in) {
         if (op == '+') {
             std::size_t node_id;
             Log::key_type key;
-            in >> key >> node_id;
+            
+            in >> key >> node_id >> pop_id;
             auto& min_dist = log.min_distance[node_id];
             if (min_dist == 0) {
                 min_dist = key;
             } else {
                 min_dist = std::min(min_dist, key);
             }
-            log.keys.push_back(key);
+            log.keys.push_back({key, pop_id});
         } else if (op == '-' || op == '=') {
             std::size_t node_id;
-            std::size_t index;
-            in >> index >> node_id;
+            std::size_t ref_index;
+            in >> ref_index >> node_id >> pop_id;
             std::size_t push_index = log.keys.size();
-            if (index >= push_index) {
+            if (ref_index >= push_index) {
                 ++invalid_pops;
-                push_index = index + 1;
+                push_index = ref_index + 1;
             }
             bool ignored = (op == '=');
-            log.pops.push_back({push_index, index, node_id, ignored});
+            std::size_t pop_index = log.pops.size();
+            log.pop_id_to_index[pop_id] = pop_index;
+            log.pops.push_back({push_index, ref_index, node_id, ignored, pop_id});
         }
     }
     std::cerr << "Invalid pops: " << invalid_pops << '\n';
@@ -105,8 +116,7 @@ ReplayResult replay(Log const& log) {
 
     ReplayTree<Log::key_type, HeapElement, ExtractKey> replay_tree{};
     std::vector<Metrics> metrics;
-    //std::unordered_map<std::size_t, Log::key_type> distances;
-
+    
     std::size_t num_pops = log.pops.size();
     std::size_t total_rank = 0;
     std::size_t total_delay = 0;
@@ -118,22 +128,22 @@ ReplayResult replay(Log const& log) {
     std::size_t max_pq_size = 0;
     std::size_t pq_size = 0;
     metrics.reserve(num_pops);
-
+    std::vector<int> extra_work_generated(num_pops, 0);
     std::size_t push_index = 0;
 
     for (auto const& pop : log.pops) {
         for (; push_index < pop.push_index; ++push_index) {
-            replay_tree.insert({log.keys[push_index], push_index});
+            replay_tree.insert({log.keys[push_index].first, push_index});
             ++pq_size;
         }
 
         total_pq_size += pq_size;
         max_pq_size = std::max(max_pq_size, pq_size);
 
-        auto [success, rank, delay] = replay_tree.erase_val({log.keys[pop.ref_index], pop.ref_index});
+        auto [success, rank, delay] = replay_tree.erase_val({log.keys[pop.ref_index].first, pop.ref_index});
 
         if (!success) {
-            std::cerr << "Failed to delete element " << pop.ref_index << " with key " << log.keys[pop.ref_index]
+            std::cerr << "Failed to delete element " << pop.ref_index << " with key " << log.keys[pop.ref_index].first
                       << '\n';
             std::abort();
         }
@@ -147,18 +157,30 @@ ReplayResult replay(Log const& log) {
         int ignored_node = 0;
         int extra_work = 0;
         if (pop.ref_index < log.keys.size()) {
-            auto pop_dist = log.keys[pop.ref_index];
+            auto pop_dist = log.keys[pop.ref_index].first;
             auto min_dist_it = log.min_distance.find(pop.node_id);
-            if (min_dist_it != log.min_distance.end() && pop_dist > min_dist_it->second) {
-                extra_work = 1;
-            }
             if (pop.ignored == true) {
                 ignored_node = 1;
             }
+            else if (min_dist_it != log.min_distance.end() && pop_dist > min_dist_it->second) {
+                extra_work = 1;
+                auto pop_id = log.keys[pop.ref_index].second;
+                auto it = log.pop_id_to_index.find(pop_id);
+                if (it != log.pop_id_to_index.end()) {
+                    std::size_t pushed_by_pop_index = it->second;
+                    if (pushed_by_pop_index < num_pops) {
+                        ++extra_work_generated[pushed_by_pop_index];
+                    }
+                }
+            }
         }
 
-        metrics.push_back({rank, delay, pq_size, pop.node_id, ignored_node, extra_work});
+        metrics.push_back({rank, delay, pq_size, pop.node_id, ignored_node, extra_work, 0});
         --pq_size;
+    }
+
+    for (std::size_t i = 0; i < num_pops; ++i) {
+        metrics[i].extra_work_generated = extra_work_generated[i];
     }
 
     return {

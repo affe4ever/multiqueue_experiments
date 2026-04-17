@@ -97,22 +97,26 @@ struct Counter {
 };
 
 #ifdef LOG_OPERATIONS
-using pop_id_t = std::pair<long long, long long>;  // {thread_id, pop_counter}
+using pop_id_t = unsigned long;
+inline pop_id_t compute_pop_id_hash(long long thread_id, long long pop_counter) {
+    return (static_cast<unsigned long>(thread_id) << 48) | 
+           (static_cast<unsigned long>(pop_counter) & 0xFFFFFFFFFFFFUL);
+}
 
 struct ThreadData {
     struct PushLog {
         std::pair<unsigned long, unsigned long> element;    // {distance, node_id}
-        pop_id_t pop_id;                                      // {thread_id, pop_counter}
+        pop_id_t pop_id;                                    // unique hash
         std::chrono::steady_clock::time_point timestamp;
     };
     struct PopLog {
         std::pair<unsigned long, unsigned long> element;    // {distance, node_id}
-        pop_id_t pop_id;                                      // {thread_id, pop_counter}
+        pop_id_t pop_id;                                    // unique hash
         std::chrono::steady_clock::time_point timestamp;
     };
     struct IgnoreLog {
         std::pair<unsigned long, unsigned long> element;    // {distance, node_id}
-        pop_id_t pop_id;                                      // {thread_id, pop_counter}
+        pop_id_t pop_id;                                    // unique hash
         std::chrono::steady_clock::time_point timestamp;  
     };
     std::vector<PushLog> pushes;
@@ -139,18 +143,18 @@ struct SharedData {
 
 #ifdef LOG_OPERATIONS
 void push_with_logging(handle_type& handle, unsigned long distance, unsigned long node_id, Counter& counter,
-                       ThreadData& thread_data, pop_id_t pop_id) {
+                        ThreadData& thread_data, pop_id_t pop_id) {
     auto timestamp = std::chrono::steady_clock::now();
     if (handle.push({distance, node_id})) {
         ++counter.pushed_nodes;
         thread_data.pushes.push_back({{distance, node_id}, pop_id, timestamp});
     }
 }
-std::pair<long long, long long> pop_with_logging(node_type const& node, ThreadData& thread_data,
-    std::chrono::steady_clock::time_point timestamp, bool is_ignored) {
+pop_id_t pop_with_logging(node_type const& node, ThreadData& thread_data,
+                        std::chrono::steady_clock::time_point timestamp, bool is_ignored) {
     auto pop_counter = ++thread_data.pop_counter;
     auto thread_id = static_cast<long long>(gettid());
-    pop_id_t pop_id = {thread_id, pop_counter};
+    pop_id_t pop_id = compute_pop_id_hash(thread_id, pop_counter);
 
     if (is_ignored) {
         thread_data.ignores.push_back({{node.first, node.second}, pop_id, timestamp});
@@ -282,7 +286,7 @@ void write_log(std::vector<ThreadData> const& thread_data, std::ostream& out) {
 
         if (op.op_type == OP_PUSH) {
             auto const& push = td.pushes[op.index];
-            out << '+' << push.element.first << ' ' << push.element.second << ' ' << push.pop_id.first << ' ' << push.pop_id.second << '\n';
+            out << '+' << push.element.first << ' ' << push.element.second << ' ' << push.pop_id << '\n';
             element_to_indices[push.element].push_back(push_index);
             ++push_index;
             
@@ -294,7 +298,7 @@ void write_log(std::vector<ThreadData> const& thread_data, std::ostream& out) {
             auto const& pop = td.pops[op.index];
             auto it = element_to_indices.find(pop.element);
             if (it != element_to_indices.end() && !it->second.empty()) {
-                out << '-' << it->second.front() << ' ' << pop.element.second << ' ' << pop.pop_id.first << ' ' << pop.pop_id.second << '\n';
+                out << '-' << it->second.front() << ' ' << pop.element.second << ' ' << pop.pop_id << '\n';
                 it->second.pop_front();
                 
                 // Erase entry when deque becomes empty to avoid memory bloat
@@ -312,7 +316,7 @@ void write_log(std::vector<ThreadData> const& thread_data, std::ostream& out) {
             auto const& ignore = td.ignores[op.index];
             auto it = element_to_indices.find(ignore.element);
             if (it != element_to_indices.end() && !it->second.empty()) {
-                out << '=' << it->second.front() << ' ' << ignore.element.second << ' ' << ignore.pop_id.first << ' ' << ignore.pop_id.second << '\n';
+                out << '=' << it->second.front() << ' ' << ignore.element.second << ' ' << ignore.pop_id << '\n';
                 it->second.pop_front();
                 
                 // Erase entry when deque becomes empty to avoid memory bloat
@@ -345,7 +349,7 @@ void write_log(std::vector<ThreadData> const& thread_data, std::ostream& out) {
     if (thread_context.id() == 0) {
         data.distances[0].value = 0;
 #ifdef LOG_OPERATIONS
-        push_with_logging(handle, 0, 0, counter, thread_data, {0, 0});
+        push_with_logging(handle, 0, 0, counter, thread_data, 0);
 #else
         handle.push({0, 0});
         ++counter.pushed_nodes;
