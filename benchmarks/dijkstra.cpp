@@ -475,6 +475,9 @@ void run_benchmark() {
     std::clog << "Ignored nodes: " << total_counts.ignored_nodes << '\n';
     std::clog << "Edge relaxations: " << total_counts.edge_relaxations << '\n';
     std::clog << "Discarded edges: " << total_counts.discarded_edges << '\n';
+    std::clog << "Min degree: " << shared_data.graph.min_degree << '\n';
+    std::clog << "Avg degree: " << std::fixed << std::setprecision(2) << shared_data.graph.avg_degree << '\n';
+    std::clog << "Max degree: " << shared_data.graph.max_degree << '\n';
     if (total_counts.processed_nodes + total_counts.ignored_nodes != total_counts.pushed_nodes) {
         std::cerr << "Warning: Not all nodes were popped\n";
         std::cerr << "Probably the priority queue discards duplicate keys\n";
@@ -486,7 +489,10 @@ void run_benchmark() {
     std::cout << std::quoted("graph") << ':';
     std::cout << '{';
     std::cout << std::quoted("num_nodes") << ':' << shared_data.graph.num_nodes() << ',';
-    std::cout << std::quoted("num_edges") << ':' << shared_data.graph.num_edges();
+    std::cout << std::quoted("num_edges") << ':' << shared_data.graph.num_edges() << ',';
+    std::cout << std::quoted("min_degree") << ':' << shared_data.graph.min_degree << ',';
+    std::cout << std::quoted("avg_degree") << ':' << shared_data.graph.avg_degree << ',';
+    std::cout << std::quoted("max_degree") << ':' << shared_data.graph.max_degree;
     std::cout << '}' << ',';
     std::cout << std::quoted("results") << ':';
     std::cout << '{';

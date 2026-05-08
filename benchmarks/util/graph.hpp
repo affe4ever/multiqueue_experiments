@@ -17,6 +17,9 @@ struct Graph {
     };
     std::vector<std::size_t> nodes;
     std::vector<Edge> edges;
+    std::size_t min_degree{0};
+    std::size_t max_degree{0};
+    double avg_degree{0.0};
 
     Graph() = default;
     Graph(std::filesystem::path const& graph_file) {
@@ -80,6 +83,8 @@ struct Graph {
         std::vector<std::pair<std::size_t, Graph::Edge>> edge_list;
         nodes.resize(num_nodes + 1);
         edge_list.reserve(num_edges);
+        min_degree = std::numeric_limits<std::size_t>::max();
+        max_degree = 0;
         for (std::size_t i = 0; i != num_edges; ++i) {
             std::pair<std::size_t, Graph::Edge> edge;
             while (std::isspace(*it) != 0) {
@@ -97,7 +102,10 @@ struct Graph {
             if (edge.first >= num_nodes) {
                 throw std::runtime_error("Invalid edge source");
             }
-            ++nodes[edge.first + 1];
+            auto& deg = nodes[edge.first + 1];
+            ++deg;
+            min_degree = std::min(min_degree, deg);
+            max_degree = std::max(max_degree, deg);
             it = res.ptr;
             while (std::isspace(*it) != 0) {
                 ++it;
@@ -122,6 +130,10 @@ struct Graph {
             edge_list.push_back(edge);
         }
         munmap(addr, static_cast<std::size_t>(sb.st_size));
+        if (min_degree == std::numeric_limits<std::size_t>::max()) {
+            min_degree = 0;
+        }
+        avg_degree = num_edges > 0 ? static_cast<double>(num_edges) / static_cast<double>(num_nodes) : 0.0;
         std::exclusive_scan(nodes.begin() + 1, nodes.end(), nodes.begin() + 1, 0);
         edges.resize(edge_list.size());
         for (auto& edge : edge_list) {
